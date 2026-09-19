@@ -7,3 +7,6 @@ public/
 web/dist/
 *.log
 .DS_Store
+
+# SDD internal workspace (ledger, task reports) — local only
+.superpowers/
