@@ -19,7 +19,7 @@ describe("App", () => {
     });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /دخول كمدير/ }));
-    expect(await screen.findByRole("button", { name: /شغّال الآن/ })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /الفريق الآن/ })).toBeInTheDocument();
   });
 
   it("dev employee login routes to employee screen", async () => {

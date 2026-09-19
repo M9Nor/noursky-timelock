@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
+import Button from "./Button.jsx";
+import { useToast } from "./ToastContext.jsx";
 
 export default function SettingsPanel({ api }) {
   const [s, setS] = useState(null);
-  const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  const toast = useToast();
 
-  useEffect(() => { api.get("/admin/settings").then(setS).catch(() => {}); }, []);
-  if (!s) return <div className="muted">جارٍ التحميل…</div>;
+  useEffect(() => { api.get("/admin/settings").then(setS).catch(() => setError("حدث خطأ، حاول مرة أخرى")); }, []);
+  if (!s && !error) return <div className="panel muted">جارٍ التحميل…</div>;
+  if (!s) return <div className="panel error">حدث خطأ، حاول مرة أخرى</div>;
 
+  const set = (k) => (e) => setS({ ...s, [k]: e.target.value });
   async function save() {
-    setMsg(""); setError("");
+    setError("");
     try {
       const saved = await api.put("/admin/settings", {
         timezone: s.timezone,
@@ -17,7 +21,7 @@ export default function SettingsPanel({ api }) {
         max_session_hours: Number(s.max_session_hours),
         work_start: s.work_start || null,
       });
-      setS(saved); setMsg("تم الحفظ");
+      setS(saved); toast("تم الحفظ");
     } catch (e) {
       setError(e.code === "INVALID_TIMEZONE" ? "المنطقة الزمنية غير صحيحة"
         : e.code === "INVALID_HOURS" ? "الساعات غير صحيحة"
@@ -25,17 +29,16 @@ export default function SettingsPanel({ api }) {
         : "حدث خطأ، حاول مرة أخرى");
     }
   }
-  const set = (k) => (e) => setS({ ...s, [k]: e.target.value });
 
   return (
-    <div className="card" style={{ maxWidth: 420 }}>
-      <label>المنطقة الزمنية<br /><input value={s.timezone} onChange={set("timezone")} /></label><br /><br />
-      <label>الهدف اليومي (ساعات)<br /><input type="number" step="0.5" value={s.daily_target_hours} onChange={set("daily_target_hours")} /></label><br /><br />
-      <label>حد الجلسة (ساعات)<br /><input type="number" step="0.5" value={s.max_session_hours} onChange={set("max_session_hours")} /></label><br /><br />
-      <label>بداية الدوام (HH:MM)<br /><input value={s.work_start ?? ""} onChange={set("work_start")} /></label><br /><br />
-      <button className="btn" onClick={save}>حفظ</button>
-      {msg && <span style={{ color: "var(--positive)", marginRight: 8 }}>{msg}</span>}
-      {error && <div className="error">{error}</div>}
-    </div>
+    <section className="panel" style={{ maxWidth: 480 }}>
+      <div className="panel-h"><h2>الإعدادات</h2></div>
+      <div className="field"><label>المنطقة الزمنية</label><input value={s.timezone} onChange={set("timezone")} /></div>
+      <div className="field"><label>الهدف اليومي (ساعات)</label><input type="number" step="0.5" value={s.daily_target_hours} onChange={set("daily_target_hours")} /></div>
+      <div className="field"><label>حد الجلسة (ساعات)</label><input type="number" step="0.5" value={s.max_session_hours} onChange={set("max_session_hours")} /></div>
+      <div className="field"><label>بداية الدوام (HH:MM)</label><input value={s.work_start ?? ""} onChange={set("work_start")} /></div>
+      {error && <div className="field"><span className="err">{error}</span></div>}
+      <div className="dlg-a"><Button onClick={save}>حفظ</Button></div>
+    </section>
   );
 }
