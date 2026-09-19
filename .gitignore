@@ -10,3 +10,7 @@ web/dist/
 
 # SDD internal workspace (ledger, task reports) — local only
 .superpowers/
+
+# Never commit any env file variant (secrets)
+*.env
+hostinger.env
