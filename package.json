@@ -6,6 +6,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
+    "build": "cd web && npm install && npm run build",
     "test:smoke": "node scripts/smoke-test.mjs"
   },
   "engines": { "node": ">=20" },

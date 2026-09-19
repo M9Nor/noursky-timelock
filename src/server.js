@@ -5,6 +5,7 @@
  */
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { cors } from "hono/cors";
 import mysql from "mysql2/promise";
 import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID } from "node:crypto";
@@ -453,6 +454,10 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   );
   return c.json(await getSettings(loc));
 });
+
+/* ---------- Static SPA (must be registered AFTER all API routes) ---------- */
+app.use("/*", serveStatic({ root: "./public" }));
+app.get("/*", serveStatic({ path: "./public/index.html" })); // SPA fallback
 
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */

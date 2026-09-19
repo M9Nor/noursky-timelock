@@ -1,0 +1,37 @@
+:root {
+  --accent: #6C5CE7;
+  --subheading: #E91E63;
+  --text: #20203A;
+  --muted: #5A5A72;
+  --surface: #F4F0FF;
+  --surface-2: #F7F7FB;
+  --positive: #1E7F4F;
+  --negative: #C0392B;
+  --warning: #B8860B;
+  --radius: 14px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font-family: system-ui, "Segoe UI", Tahoma, Arial, sans-serif;
+  color: var(--text);
+  background: var(--surface-2);
+  direction: rtl;
+  /* Western digits everywhere, even inside Arabic text runs */
+  font-variant-numeric: lining-nums;
+}
+.card {
+  background: #fff;
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: 0 1px 4px rgba(32,32,58,.08);
+}
+.btn {
+  border: 0; border-radius: var(--radius); padding: 14px 22px;
+  font-size: 1rem; font-weight: 600; cursor: pointer; color: #fff;
+  background: var(--accent);
+}
+.btn:disabled { opacity: .6; cursor: default; }
+.btn-stop { background: var(--negative); }
+.muted { color: var(--muted); }
+.error { color: var(--negative); }
