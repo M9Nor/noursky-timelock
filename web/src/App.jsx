@@ -74,8 +74,9 @@ export default function App() {
 
   return (
     <ToastProvider>
+      <a className="skip" href="#main">الانتقال إلى المحتوى</a>
       <TopBar role={role} onRole={setRoleOverride} />
-      <main className="main-wrap">
+      <main id="main">
         {role === "manager" ? <ManagerDashboard api={api.current} /> : <EmployeeScreen api={api.current} user={user} />}
       </main>
     </ToastProvider>
