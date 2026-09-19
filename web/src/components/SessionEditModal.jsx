@@ -1,9 +1,8 @@
 import { useState } from "react";
+import Button from "./Button.jsx";
 
-// datetime-local <-> unix seconds (local wall time, no TZ math — matches display).
 const toLocalInput = (sec) => {
-  const d = new Date(sec * 1000);
-  const p = (n) => String(n).padStart(2, "0");
+  const d = new Date(sec * 1000); const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 };
 const fromLocalInput = (v) => Math.floor(new Date(v).getTime() / 1000);
@@ -19,33 +18,26 @@ export default function SessionEditModal({ api, session, onClose, onSaved }) {
     if (!reason.trim()) { setError("سبب التعديل مطلوب"); return; }
     setSaving(true); setError("");
     try {
-      await api.patch(`/admin/sessions/${session.id}`, {
-        started_at: fromLocalInput(start),
-        ended_at: fromLocalInput(end),
-        reason: reason.trim(),
-      });
+      await api.patch(`/admin/sessions/${session.id}`, { started_at: fromLocalInput(start), ended_at: fromLocalInput(end), reason: reason.trim() });
       onSaved();
     } catch (e) {
       setError(e.code === "INVALID_TIMES" ? "الأوقات غير صحيحة" : "حدث خطأ، حاول مرة أخرى");
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   }
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", display: "grid", placeItems: "center" }}>
-      <div className="card" style={{ width: 360 }}>
-        <h3 style={{ color: "var(--subheading)" }}>تعديل الجلسة</h3>
-        <label>البداية<br /><input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} /></label>
-        <br /><br />
-        <label>النهاية<br /><input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} /></label>
-        <br /><br />
-        <textarea placeholder="سبب التعديل" value={reason} onChange={(e) => setReason(e.target.value)}
-          style={{ width: "100%" }} rows={2} />
-        {error && <div className="error">{error}</div>}
-        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <button className="btn" onClick={save} disabled={saving}>حفظ</button>
-          <button className="btn" style={{ background: "var(--muted)" }} onClick={onClose}>إلغاء</button>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,20,37,.5)", display: "grid", placeItems: "center", zIndex: 60 }}>
+      <div className="dlg" style={{ background: "var(--panel)", borderRadius: "var(--r-lg)", width: "min(480px, calc(100vw - 32px))" }}>
+        <h2>تعديل الجلسة</h2>
+        <div className="row2">
+          <div className="field"><label>البداية</label><input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} /></div>
+          <div className="field"><label>النهاية</label><input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} /></div>
+        </div>
+        <div className="field"><label>سبب التعديل</label><textarea placeholder="سبب التعديل" value={reason} onChange={(e) => setReason(e.target.value)} /></div>
+        {error && <div className="field"><span className="err">{error}</span></div>}
+        <div className="dlg-a">
+          <Button onClick={save} loading={saving}>حفظ</Button>
+          <Button variant="ghost" onClick={onClose}>إلغاء</Button>
         </div>
       </div>
     </div>
