@@ -32,6 +32,7 @@ button{cursor:pointer}
 :focus-visible{outline:2px solid var(--pink); outline-offset:2px}
 .ltr{direction:ltr; unicode-bidi:isolate}
 .muted{color:var(--muted)}
+.error{color:var(--neg)}
 .sr{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap}
 svg.i{width:20px; height:20px; flex:none; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round}
 
