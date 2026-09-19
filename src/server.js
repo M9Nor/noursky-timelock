@@ -217,8 +217,11 @@ app.post("/auth/sso", async (c) => {
   }));
 });
 
+// dev-login is available outside production, OR when PREVIEW_MODE=1 is set as a
+// TEMPORARY demo flag on a production host. PREVIEW_MODE must be removed before
+// real clients use the app — while it is on, anyone with the URL can sign in.
 app.post("/auth/dev-login", async (c) => {
-  if (env.NODE_ENV === "production") throw new HttpError(404, "DEV_LOGIN_DISABLED");
+  if (env.NODE_ENV === "production" && env.PREVIEW_MODE !== "1") throw new HttpError(404, "DEV_LOGIN_DISABLED");
   const { role } = await c.req.json().catch(() => ({}));
   const isMgr = role === "manager";
   return c.json(await issueSession({

@@ -1,4 +1,4 @@
-const IS_DEV = import.meta.env.DEV;
+const IS_DEV = import.meta.env.DEV || import.meta.env.VITE_PREVIEW === "1";
 const todayLabel = () =>
   new Intl.DateTimeFormat("ar-SA-u-nu-latn-ca-gregory", { weekday: "long", day: "numeric", month: "long" }).format(new Date());
 

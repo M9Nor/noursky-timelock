@@ -7,6 +7,11 @@ import { ToastProvider } from "./components/Toast.jsx";
 import TopBar from "./components/TopBar.jsx";
 
 const IS_DEV = import.meta.env.DEV;
+// TEMPORARY preview flag: when the app is built with VITE_PREVIEW=1, it shows the
+// dev-login picker even in a production build so the design can be demoed outside
+// GHL. Remove VITE_PREVIEW before real clients use the app.
+const IS_PREVIEW = import.meta.env.VITE_PREVIEW === "1";
+const SHOW_DEV_LOGIN = IS_DEV || IS_PREVIEW;
 
 export default function App() {
   const tokenRef = useRef(null);
@@ -42,7 +47,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (IS_DEV) { setReady(true); return; } // wait for role picker
+    if (SHOW_DEV_LOGIN) { setReady(true); return; } // wait for role picker
     doSsoLogin().catch((e) => setError(e.code || e.message || "AUTH_FAILED")).finally(() => setReady(true));
   }, []);
 
@@ -58,7 +63,7 @@ export default function App() {
   if (!ready) return <div className="card muted" style={{ maxWidth: 420, margin: "40px auto" }}>جارٍ التحقق…</div>;
 
   if (!user) {
-    if (IS_DEV) {
+    if (SHOW_DEV_LOGIN) {
       return (
         <div className="card" style={{ maxWidth: 420, margin: "40px auto", textAlign: "center" }}>
           <p className="muted">وضع التطوير</p>
