@@ -28,7 +28,7 @@ export default function App() {
         throw e;
       }
     };
-    api.current = { get: wrap(base.get), post: wrap(base.post), put: wrap(base.put), patch: wrap(base.patch), rawUrl: base.rawUrl };
+    api.current = { get: wrap(base.get), post: wrap(base.post), put: wrap(base.put), patch: wrap(base.patch), rawUrl: base.rawUrl, download: wrap(base.download) };
   }
 
   async function doSsoLogin() {

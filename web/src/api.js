@@ -17,11 +17,31 @@ export function createApi(getToken) {
     if (!res.ok) throw new ApiError(res.status, data?.error ?? "INTERNAL_ERROR");
     return data;
   }
+  async function download(path, filename) {
+    const token = getToken();
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(path, { headers });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, data.error ?? "INTERNAL_ERROR");
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
   return {
     get: (p) => request("GET", p),
     post: (p, b) => request("POST", p, b),
     put: (p, b) => request("PUT", p, b),
     patch: (p, b) => request("PATCH", p, b),
     rawUrl: (p) => p, // same-origin; used for CSV download links
+    download,
   };
 }

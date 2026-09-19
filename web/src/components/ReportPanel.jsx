@@ -26,12 +26,21 @@ export default function ReportPanel({ api }) {
   const [report, setReport] = useState(null);
   const [detail, setDetail] = useState(null); // { user_id, name, sessions }
   const [editing, setEditing] = useState(null); // a session row
+  const [error, setError] = useState("");
 
   async function load() {
     const r = await api.get(`/admin/report?from=${range.from}&to=${range.to}`);
     setReport(r);
   }
   useEffect(() => { load().catch(() => {}); }, [range.from, range.to]);
+
+  async function exportCsv() {
+    try {
+      await api.download(`/admin/export.csv?from=${range.from}&to=${range.to}`, `timeclock-${range.from}-${range.to}.csv`);
+    } catch {
+      setError("حدث خطأ، حاول مرة أخرى");
+    }
+  }
 
   async function openDetail(emp) {
     const d = await api.get(`/admin/sessions?from=${range.from}&to=${range.to}&user_id=${emp.user_id}`);
@@ -45,8 +54,9 @@ export default function ReportPanel({ api }) {
         <button className="btn" onClick={() => setRange(todayRange())}>اليوم</button>
         <button className="btn" onClick={() => setRange(weekRange())}>الأسبوع</button>
         <button className="btn" onClick={() => setRange(monthRange())}>الشهر</button>
-        <a className="btn" href={`/admin/export.csv?from=${range.from}&to=${range.to}`}>تصدير CSV</a>
+        <button className="btn" onClick={exportCsv}>تصدير CSV</button>
       </div>
+      {error && <div className="error" style={{ marginBottom: 12 }}>{error}</div>}
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr><th>الموظف</th><th>الساعات</th><th>الهدف</th><th>الإنجاز</th><th>أيام</th><th>تلقائي</th></tr></thead>
         <tbody>
