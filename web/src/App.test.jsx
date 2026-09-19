@@ -30,6 +30,6 @@ describe("App", () => {
     });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /دخول كموظف/ }));
-    expect(await screen.findByRole("button", { name: /ابدأ الدوام/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /بدء الدوام/ })).toBeInTheDocument();
   });
 });
