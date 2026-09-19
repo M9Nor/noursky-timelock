@@ -6,8 +6,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "build": "cd web && npm install && npm run build",
-    "build:web": "cd web && npm install && npm run build",
+    "build": "node scripts/build-web.mjs",
     "postinstall": "node scripts/build-web.mjs",
     "test:smoke": "node scripts/smoke-test.mjs"
   },
