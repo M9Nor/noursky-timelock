@@ -30,18 +30,21 @@ if (!existsSync(webDir)) {
 
 console.log("[build-web] installing web/ deps and building into public/ …");
 const cmd = process.platform === "win32" ? "npm.cmd" : "npm";
-// The host installs the root in production mode, which npm inherits into web/'s
-// install and skips devDependencies — but vite lives there. Force dev deps and
-// run the build with NODE_ENV unset to production so the toolchain is present.
-const childEnv = { ...process.env, NODE_ENV: "development" };
+// The host installs the root in production mode, which npm would inherit into
+// web/'s install and skip devDependencies — but vite lives there. So INSTALL
+// with NODE_ENV=development + --include=dev to get the toolchain, then BUILD
+// with NODE_ENV=production so Vite emits a production bundle (import.meta.env.DEV
+// === false, which hides the dev-login screen). Mixing these up ships dev mode.
+const installEnv = { ...process.env, NODE_ENV: "development" };
+const buildEnv = { ...process.env, NODE_ENV: "production" };
 const install = spawnSync(cmd, ["install", "--include=dev", "--no-audit", "--no-fund"], {
-  cwd: webDir, stdio: "inherit", env: childEnv,
+  cwd: webDir, stdio: "inherit", env: installEnv,
 });
 if (install.status !== 0) {
   console.error("[build-web] web/ npm install failed");
   process.exit(install.status ?? 1);
 }
-const build = spawnSync(cmd, ["run", "build"], { cwd: webDir, stdio: "inherit", env: childEnv });
+const build = spawnSync(cmd, ["run", "build"], { cwd: webDir, stdio: "inherit", env: buildEnv });
 if (build.status !== 0) {
   console.error("[build-web] web/ build failed");
   process.exit(build.status ?? 1);
