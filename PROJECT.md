@@ -1,6 +1,6 @@
 # NourSky TimeClock — نظام تتبع دوام الموظفين داخل GoHighLevel
 
-> **الحالة:** Backend جاهز ومُختبر محلياً · Frontend لسا ما بلّش · ما صار deploy
+> **الحالة:** Backend جاهز ومُختبر محلياً · Frontend مبني ومُختبر بالوحدات · لسا ما صار deploy
 > **آخر تحديث:** 19 September 2026
 > **المالك:** NourSky Digital Agency
 
@@ -446,8 +446,8 @@ health · SSO موظف → employee · SSO admin → manager · secret غلط م
 | النقل من Cloudflare لـ Hostinger/MySQL | 0.5 يوم | ✅ خلص |
 | Smoke test | — | ✅ خلص |
 | إعداد تطبيق GHL + ربط الـ Custom Page | 0.5 يوم | ⏳ |
-| واجهة React RTL (موظف + مدير + إعدادات) | 2.5 إلى 3 أيام | ⏳ **الجاي** |
-| خدمة الواجهة static من Hono | 0.25 يوم | ⏳ |
+| واجهة React RTL (موظف + مدير + إعدادات) | 2.5 إلى 3 أيام | ✅ خلص |
+| خدمة الواجهة static من Hono | 0.25 يوم | ✅ خلص |
 | Deploy على Hostinger + اختبار حقيقي داخل GHL | 1.5 إلى 2 يوم | ⏳ |
 
 ### Phase 2 — تحسينات
@@ -479,7 +479,9 @@ Onboarding لكل Sub-Account، billing، وإمكانية نشره كتطبيق
 
 **بناء واجهة React داخل `web/` حسب القسم 10**، وتعديل السيرفر ليخدم الـ build من `public/`:
 
-1. `web/` بـ Vite + React، الـ build output بيروح لـ `../public`.
-2. `src/server.js`: إضافة `serveStatic` من `@hono/node-server/serve-static` لـ `public/` مع fallback لـ `index.html`. الـ API routes لازم تنسجل **قبل** الـ static.
-3. `package.json`: إضافة `"build": "cd web && npm install && npm run build"` لحتى Hostinger يبني الواجهة وقت الـ deploy.
-4. للتطوير المحلي بدون GHL: وضع dev بيسمح بتسجيل دخول وهمي **فقط** إذا `NODE_ENV !== 'production'`.
+1. ✅ خلص — `web/` بـ Vite + React، الـ build output بيروح لـ `../public`.
+2. ✅ خلص — `src/server.js`: إضافة `serveStatic` من `@hono/node-server/serve-static` لـ `public/` مع fallback لـ `index.html`. الـ API routes لازم تنسجل **قبل** الـ static.
+3. ✅ خلص — `package.json`: إضافة `"build": "cd web && npm install && npm run build"` لحتى Hostinger يبني الواجهة وقت الـ deploy.
+4. ✅ خلص — للتطوير المحلي بدون GHL: وضع dev بيسمح بتسجيل دخول وهمي **فقط** إذا `NODE_ENV !== 'production'`.
+
+Dev login: POST /auth/dev-login (NODE_ENV != production فقط).
