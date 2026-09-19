@@ -184,6 +184,22 @@ app.get("/health", async (c) => {
   return c.json({ ok: true, time: now() });
 });
 
+/** Upsert the employee, ensure a settings row, and mint our HMAC token. */
+async function issueSession({ userId, loc, role, name, email }) {
+  const t = now();
+  await q(
+    `INSERT INTO employees (user_id, location_id, name, email, role, created_at, updated_at)
+     VALUES (:uid, :loc, :name, :email, :role, :t, :t)
+     ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email),
+                             role = VALUES(role), updated_at = VALUES(updated_at)`,
+    { uid: userId, loc, name: name ?? null, email: email ?? null, role, t }
+  );
+  await q("INSERT IGNORE INTO settings (location_id, updated_at) VALUES (:loc, :t)", { loc, t });
+  const claims = { uid: userId, loc, role, name: name ?? "", email: email ?? "", exp: t + SESSION_TTL };
+  const { exp, ...user } = claims;
+  return { token: signToken(claims), user };
+}
+
 /* ---------- Auth ---------- */
 
 app.post("/auth/sso", async (c) => {
@@ -195,20 +211,22 @@ app.post("/auth/sso", async (c) => {
   if (!loc) throw new HttpError(403, "OPEN_FROM_SUB_ACCOUNT");
 
   const role = d.role === "admin" || d.type === "agency" ? "manager" : "employee";
-  const t = now();
+  return c.json(await issueSession({
+    userId: d.userId, loc, role, name: d.userName ?? "", email: d.email ?? "",
+  }));
+});
 
-  await q(
-    `INSERT INTO employees (user_id, location_id, name, email, role, created_at, updated_at)
-     VALUES (:uid, :loc, :name, :email, :role, :t, :t)
-     ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email),
-                             role = VALUES(role), updated_at = VALUES(updated_at)`,
-    { uid: d.userId, loc, name: d.userName ?? null, email: d.email ?? null, role, t }
-  );
-  await q("INSERT IGNORE INTO settings (location_id, updated_at) VALUES (:loc, :t)", { loc, t });
-
-  const claims = { uid: d.userId, loc, role, name: d.userName ?? "", email: d.email ?? "", exp: t + SESSION_TTL };
-  const { exp, ...user } = claims;
-  return c.json({ token: signToken(claims), user });
+app.post("/auth/dev-login", async (c) => {
+  if (env.NODE_ENV === "production") throw new HttpError(404, "DEV_LOGIN_DISABLED");
+  const { role } = await c.req.json().catch(() => ({}));
+  const isMgr = role === "manager";
+  return c.json(await issueSession({
+    userId: isMgr ? "dev-manager" : "dev-employee",
+    loc: "dev-local",
+    role: isMgr ? "manager" : "employee",
+    name: isMgr ? "مدير تجريبي" : "موظف تجريبي",
+    email: "dev@local",
+  }));
 });
 
 /* ---------- Employee ---------- */

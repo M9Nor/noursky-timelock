@@ -101,5 +101,24 @@ check("CSV contains Arabic name", csv.status === 200 && String(csv.body).include
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
 
+// --- dev-login (only meaningful when the target server runs with NODE_ENV != production) ---
+const dev = await fetch(`${BASE}/auth/dev-login`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ role: "manager" }),
+});
+if (dev.status === 404) {
+  check("dev-login disabled (server in production mode)", true);
+} else {
+  const devBody = await dev.json();
+  check("dev-login returns a manager token", dev.status === 200 && devBody?.user?.role === "manager");
+  const devEmp = await fetch(`${BASE}/auth/dev-login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role: "employee" }),
+  }).then((r) => r.json());
+  check("dev-login employee role", devEmp?.user?.role === "employee");
+  const meDev = await call(devBody.token, "GET", "/me/status");
+  check("dev-login token works on protected route", meDev.status === 200);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
