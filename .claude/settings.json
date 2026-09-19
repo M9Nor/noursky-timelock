@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git fetch --quiet; git status -sb; echo '--- PROGRESS ---'; head -n 60 docs/PROGRESS.md"
+          }
+        ]
+      }
+    ]
+  }
+}

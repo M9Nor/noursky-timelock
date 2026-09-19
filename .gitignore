@@ -1,16 +1,18 @@
 node_modules/
 web/node_modules/
-.env
-.env.*
-!.env.example
 public/
 web/dist/
 *.log
 .DS_Store
 
+# Env files — never commit real values; the example IS committed
+.env
+.env.*
+hostinger.env
+!.env.example
+
+# Local-only Claude Code settings (never shared)
+.claude/settings.local.json
+
 # SDD internal workspace (ledger, task reports) — local only
 .superpowers/
-
-# Never commit any env file variant (secrets)
-*.env
-hostinger.env
