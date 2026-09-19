@@ -30,12 +30,18 @@ if (!existsSync(webDir)) {
 
 console.log("[build-web] installing web/ deps and building into public/ …");
 const cmd = process.platform === "win32" ? "npm.cmd" : "npm";
-const install = spawnSync(cmd, ["install"], { cwd: webDir, stdio: "inherit" });
+// The host installs the root in production mode, which npm inherits into web/'s
+// install and skips devDependencies — but vite lives there. Force dev deps and
+// run the build with NODE_ENV unset to production so the toolchain is present.
+const childEnv = { ...process.env, NODE_ENV: "development" };
+const install = spawnSync(cmd, ["install", "--include=dev", "--no-audit", "--no-fund"], {
+  cwd: webDir, stdio: "inherit", env: childEnv,
+});
 if (install.status !== 0) {
   console.error("[build-web] web/ npm install failed");
   process.exit(install.status ?? 1);
 }
-const build = spawnSync(cmd, ["run", "build"], { cwd: webDir, stdio: "inherit" });
+const build = spawnSync(cmd, ["run", "build"], { cwd: webDir, stdio: "inherit", env: childEnv });
 if (build.status !== 0) {
   console.error("[build-web] web/ build failed");
   process.exit(build.status ?? 1);
