@@ -3,6 +3,8 @@ import { createApi, ApiError } from "./api.js";
 import { ssoLogin, devLogin } from "./auth.js";
 import EmployeeScreen from "./components/EmployeeScreen.jsx";
 import ManagerDashboard from "./components/ManagerDashboard.jsx";
+import { ToastProvider } from "./components/Toast.jsx";
+import TopBar from "./components/TopBar.jsx";
 
 const IS_DEV = import.meta.env.DEV;
 
@@ -11,7 +13,9 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
+  const [roleOverride, setRoleOverride] = useState(null);
   const retriedRef = useRef(false);
+  const role = roleOverride ?? user?.role;
 
   // createApi reads the latest token, and re-auths once on 401.
   const api = useRef(null);
@@ -68,7 +72,12 @@ export default function App() {
     return <div className="card muted" style={{ maxWidth: 420, margin: "40px auto" }}>جارٍ التحقق…</div>;
   }
 
-  return user.role === "manager"
-    ? <ManagerDashboard api={api.current} />
-    : <EmployeeScreen api={api.current} />;
+  return (
+    <ToastProvider>
+      <TopBar role={role} onRole={setRoleOverride} />
+      <main className="main-wrap">
+        {role === "manager" ? <ManagerDashboard api={api.current} /> : <EmployeeScreen api={api.current} user={user} />}
+      </main>
+    </ToastProvider>
+  );
 }
