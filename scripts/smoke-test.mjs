@@ -91,7 +91,10 @@ check("edit without reason → 400",
 const edit = await call(M, "PATCH", `/admin/sessions/${sid}`, { started_at: t - 7200, ended_at: t - 3600, reason: "نسي يسجل" });
 check("edit with reason → 200", edit.status === 200 && edit.body.duration_sec === 3600);
 
-const set = await call(M, "PUT", "/admin/settings", { timezone: "Asia/Dubai", daily_target_hours: 8, max_session_hours: 10, work_start: "09:00" });
+const set = await call(M, "PUT", "/admin/settings", { timezone: "Asia/Dubai", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 20 });
+check("late_grace_minutes saved", set.body?.late_grace_minutes === 20);
+const badGrace = await call(M, "PUT", "/admin/settings", { timezone: "Asia/Dubai", daily_target_hours: 8, max_session_hours: 12, late_grace_minutes: 500 });
+check("late_grace_minutes out of range → 400", badGrace.status === 400);
 check("settings update", set.status === 200 && set.body.timezone === "Asia/Dubai");
 check("invalid timezone → 400",
   (await call(M, "PUT", "/admin/settings", { timezone: "Mars/Base", daily_target_hours: 8, max_session_hours: 10 })).status === 400);

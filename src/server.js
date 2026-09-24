@@ -448,12 +448,14 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   const target = Number(b.daily_target_hours), max = Number(b.max_session_hours);
   if (!(target > 0 && target <= 24) || !(max >= 1 && max <= 24)) throw new HttpError(400, "INVALID_HOURS");
   if (b.work_start && !/^([01]\d|2[0-3]):[0-5]\d$/.test(b.work_start)) throw new HttpError(400, "INVALID_WORK_START");
+  const grace = b.late_grace_minutes === undefined ? 15 : Number(b.late_grace_minutes);
+  if (!Number.isInteger(grace) || grace < 0 || grace > 240) throw new HttpError(400, "INVALID_GRACE");
 
   await q(
     `UPDATE settings SET timezone = :tz, daily_target_hours = :target, work_start = :ws,
-                         max_session_hours = :max, updated_at = :t
+                         late_grace_minutes = :grace, max_session_hours = :max, updated_at = :t
       WHERE location_id = :loc`,
-    { tz: b.timezone, target, ws: b.work_start ?? null, max, t: now(), loc }
+    { tz: b.timezone, target, ws: b.work_start ?? null, grace, max, t: now(), loc }
   );
   return c.json(await getSettings(loc));
 });

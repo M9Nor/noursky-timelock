@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS settings (
   timezone           VARCHAR(64)  NOT NULL DEFAULT 'Asia/Riyadh',
   daily_target_hours DECIMAL(4,2) NOT NULL DEFAULT 8,
   work_start         CHAR(5)      NULL DEFAULT '09:00',
+  late_grace_minutes INT          NOT NULL DEFAULT 15,
   max_session_hours  DECIMAL(4,2) NOT NULL DEFAULT 12,
   updated_at         BIGINT       NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

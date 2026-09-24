@@ -263,6 +263,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | `INVALID_TIMES` | 400 | النهاية قبل البداية أو بالمستقبل | الأوقات غير صحيحة |
 | `INVALID_RANGE` | 400 | `to <= from` | |
 | `INVALID_TIMEZONE` / `INVALID_HOURS` / `INVALID_WORK_START` | 400 | | |
+| `INVALID_GRACE` | 400 | سماح التأخير خارج المدى (0–240 دقيقة) | صحّح القيمة |
 | `SESSION_NOT_FOUND` | 404 | | |
 | `DEV_LOGIN_DISABLED` | 404 | dev-login مطلوب بالإنتاج | (تطوير فقط) |
 | `INTERNAL_ERROR` | 500 | | حدث خطأ، حاول مرة أخرى |
