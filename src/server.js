@@ -334,11 +334,27 @@ app.get("/admin/report", authed, managerOnly, async (c) => {
   const st = await getSettings(loc);
   const tz = st?.timezone ?? "Asia/Riyadh";
 
+  // Lateness threshold as seconds-since-local-midnight; NULL work_start disables it.
+  const ws = st?.work_start ?? null;
+  const graceSec = Number(st?.late_grace_minutes ?? 15) * 60;
+  const lateAfterSec = ws
+    ? Number(ws.slice(0, 2)) * 3600 + Number(ws.slice(3, 5)) * 60 + graceSec
+    : null;
+
   const employees = await q(
     `SELECT e.user_id, e.name, e.email,
             COALESCE(SUM(${WORKED_EXPR}), 0)                                 AS worked_sec,
             COUNT(s.id)                                                      AS sessions_count,
             COUNT(DISTINCT DATE(FROM_UNIXTIME(s.started_at + :off)))         AS days_present,
+            COUNT(DISTINCT CASE
+              WHEN :lateAfter IS NOT NULL
+               AND s.started_at + :off = (
+                     SELECT MIN(s2.started_at + :off) FROM sessions s2
+                      WHERE s2.user_id = s.user_id AND s2.location_id = s.location_id
+                        AND DATE(FROM_UNIXTIME(s2.started_at + :off)) = DATE(FROM_UNIXTIME(s.started_at + :off))
+                   )
+               AND TIME_TO_SEC(TIME(FROM_UNIXTIME(s.started_at + :off))) > :lateAfter
+              THEN DATE(FROM_UNIXTIME(s.started_at + :off)) END)          AS late_days,
             COALESCE(SUM(CASE WHEN s.closed_by = 'auto' THEN 1 ELSE 0 END), 0) AS auto_closed
        FROM employees e
        LEFT JOIN sessions s
@@ -347,12 +363,13 @@ app.get("/admin/report", authed, managerOnly, async (c) => {
       WHERE e.location_id = :loc AND e.is_active = 1
       GROUP BY e.user_id, e.name, e.email
       ORDER BY worked_sec DESC`,
-    { now: now(), to, from, off: tzOffsetSec(tz), loc }
+    { now: now(), to, from, off: tzOffsetSec(tz), lateAfter: lateAfterSec, loc }
   );
 
   return c.json({
     from, to, timezone: tz,
     daily_target_hours: st?.daily_target_hours ?? 8,
+    work_start: ws,
     employees: employees.map((r) => ({ ...r, worked_sec: Number(r.worked_sec) })),
   });
 });

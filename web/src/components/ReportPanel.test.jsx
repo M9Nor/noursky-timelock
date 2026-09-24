@@ -8,8 +8,8 @@ const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
 function makeApi() {
   return {
     get: vi.fn(async (p) => p.startsWith("/admin/report")
-      ? { from: 0, to: 1, timezone: "Asia/Riyadh", daily_target_hours: 8,
-          employees: [{ user_id: "a", name: "أحمد", worked_sec: 3600, sessions_count: 1, days_present: 1, auto_closed: 0 }] }
+      ? { from: 0, to: 1, timezone: "Asia/Riyadh", daily_target_hours: 8, work_start: "09:00",
+          employees: [{ user_id: "a", name: "أحمد", worked_sec: 3600, sessions_count: 1, days_present: 1, auto_closed: 0, late_days: 0 }] }
       : { sessions: [] }),
     download: vi.fn(async () => {}),
   };
@@ -48,5 +48,17 @@ describe("ReportPanel", () => {
     fireEvent.change(screen.getByPlaceholderText(/بحث/), { target: { value: "سارة" } });
     expect(screen.queryByText("أحمد")).not.toBeInTheDocument();
     expect(screen.getByText("سارة")).toBeInTheDocument();
+  });
+
+  it("shows a late-days column when work_start is set", async () => {
+    const api = {
+      get: vi.fn(async () => ({
+        from: 0, to: 1, timezone: "Europe/Istanbul", daily_target_hours: 8, work_start: "09:00",
+        employees: [{ user_id: "u1", name: "أحمد", worked_sec: 3600, days_present: 2, auto_closed: 0, late_days: 1 }],
+      })),
+      download: vi.fn(),
+    };
+    wrap(<ReportPanel api={api} />);
+    expect(await screen.findByText("أيام التأخير")).toBeInTheDocument();
   });
 });

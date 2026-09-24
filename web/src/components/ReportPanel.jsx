@@ -80,7 +80,8 @@ export default function ReportPanel({ api }) {
         <table>
           <thead><tr>
             <th scope="col">الموظف</th><th scope="col">ساعات العمل</th><th scope="col">الهدف</th>
-            <th scope="col">الإنجاز</th><th scope="col">أيام الحضور</th><th scope="col">مغلقة تلقائياً</th>
+            <th scope="col">الإنجاز</th><th scope="col">أيام الحضور</th>
+            <th scope="col">أيام التأخير</th><th scope="col">مغلقة تلقائياً</th>
           </tr></thead>
           <tbody>
             {employees.length ? employees.map((e) => {
@@ -94,10 +95,11 @@ export default function ReportPanel({ api }) {
                   <td className="num">{t.toFixed(2)}</td>
                   <td className="num" style={{ color: completionColor(pct) }}>{pct}%</td>
                   <td className="num">{e.days_present}</td>
+                  <td className="num">{report.work_start ? e.late_days : "—"}</td>
                   <td className="num">{e.auto_closed}</td>
                 </tr>
               );
-            }) : <tr><td colSpan={6} className="empty">لا يوجد موظفون مطابقون.</td></tr>}
+            }) : <tr><td colSpan={7} className="empty">لا يوجد موظفون مطابقون.</td></tr>}
           </tbody>
         </table>
       </div>

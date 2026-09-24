@@ -81,6 +81,7 @@ const t = Math.floor(Date.now() / 1000);
 const rep = await call(M, "GET", `/admin/report?from=${t - 86400}&to=${t + 10}`);
 const row = rep.body?.employees?.find((e) => e.name === "أحمد");
 check("report returns worked_sec", row && row.worked_sec >= 1);
+check("report returns late_days", row && typeof row.late_days === "number");
 
 const list = await call(M, "GET", `/admin/sessions?from=${t - 86400}&to=${t + 10}`);
 const sid = list.body?.sessions?.[0]?.id;

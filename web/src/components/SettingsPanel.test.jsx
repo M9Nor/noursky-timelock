@@ -8,12 +8,21 @@ const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
 describe("SettingsPanel", () => {
   it("loads settings then saves via PUT", async () => {
     const api = {
-      get: vi.fn(async () => ({ timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00" })),
-      put: vi.fn(async () => ({ timezone: "Asia/Dubai", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00" })),
+      get: vi.fn(async () => ({ timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15 })),
+      put: vi.fn(async () => ({ timezone: "Asia/Dubai", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15 })),
     };
     wrap(<SettingsPanel api={api} />);
     await waitFor(() => expect(api.get).toHaveBeenCalledWith("/admin/settings"));
     fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
     await waitFor(() => expect(api.put).toHaveBeenCalledWith("/admin/settings", expect.objectContaining({ timezone: "Asia/Riyadh" })));
+  });
+
+  it("renders the late grace field", async () => {
+    const api = {
+      get: vi.fn(async () => ({ timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15 })),
+      put: vi.fn(async () => ({ timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15 })),
+    };
+    wrap(<SettingsPanel api={api} />);
+    expect(await screen.findByLabelText("سماح التأخير (دقائق)")).toBeInTheDocument();
   });
 });
