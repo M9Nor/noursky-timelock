@@ -21,11 +21,21 @@ export default function EmployeeScreen({ api, user }) {
     const weekFrom = s.server_time - 7 * 86400;
     const wk = await api.get(`/me/status?since=${weekFrom}`);
     setWeekSec(wk.worked_sec);
-    const cfg = await api.get("/me/settings");
-    setTargetSec(Number(cfg.daily_target_hours) * 3600);
   }
 
   useEffect(() => { refresh().catch((e) => setError(e.code || "INTERNAL_ERROR")); }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const cfg = await api.get("/me/settings");
+        setTargetSec(Number(cfg.daily_target_hours) * 3600);
+      } catch {
+        // Silently degrade to default 8-hour target on settings fetch failure
+      }
+    })();
+  }, [api]);
+
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
