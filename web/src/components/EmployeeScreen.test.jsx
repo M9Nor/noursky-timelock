@@ -5,8 +5,17 @@ import EmployeeScreen from "./EmployeeScreen.jsx";
 
 const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
 
-function makeApi(status) {
-  return { get: vi.fn(async () => status), post: vi.fn(async () => ({})) };
+function makeApi(status, settings = { daily_target_hours: 8, timezone: "Asia/Riyadh", work_start: null }) {
+  const get = vi.fn((path) => {
+    if (path && path.startsWith("/me/settings")) {
+      return Promise.resolve(settings);
+    }
+    return Promise.resolve(status);
+  });
+  return {
+    get,
+    post: vi.fn(async () => ({})),
+  };
 }
 
 describe("EmployeeScreen", () => {
@@ -36,5 +45,16 @@ describe("EmployeeScreen", () => {
     const api = makeApi({ open_session: null, worked_sec: 0, server_time: 1000 });
     wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
     expect(await screen.findByText(/سارة/)).toBeInTheDocument();
+  });
+
+  it("uses the location's daily target, not a hardcoded 8", async () => {
+    const api = makeApi(
+      { open_session: null, worked_sec: 0, server_time: 1000 },
+      { daily_target_hours: 6, timezone: "Asia/Riyadh", work_start: null }
+    );
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    // Multiple elements with "6.00" appear (required + remaining), so use getAllByText
+    const elements = await screen.findAllByText("6.00");
+    expect(elements).not.toHaveLength(0);
   });
 });

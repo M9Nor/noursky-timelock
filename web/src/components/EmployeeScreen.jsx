@@ -4,14 +4,13 @@ import Icon from "./Icon.jsx";
 import { useToast } from "./ToastContext.jsx";
 import { formatClock, formatHours, serverOffset, nowWithOffset } from "../time.js";
 
-const DAILY_TARGET_SEC = 8 * 3600; // employee has no settings route; spec §7 default
-
 export default function EmployeeScreen({ api, user }) {
   const [status, setStatus] = useState(null);
   const [weekSec, setWeekSec] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [, setTick] = useState(0);
+  const [targetSec, setTargetSec] = useState(8 * 3600);
   const offsetRef = useRef(0);
   const toast = useToast();
 
@@ -22,6 +21,8 @@ export default function EmployeeScreen({ api, user }) {
     const weekFrom = s.server_time - 7 * 86400;
     const wk = await api.get(`/me/status?since=${weekFrom}`);
     setWeekSec(wk.worked_sec);
+    const cfg = await api.get("/me/settings");
+    setTargetSec(Number(cfg.daily_target_hours) * 3600);
   }
 
   useEffect(() => { refresh().catch((e) => setError(e.code || "INTERNAL_ERROR")); }, []);
@@ -50,8 +51,8 @@ export default function EmployeeScreen({ api, user }) {
   const liveSec = open ? nowWithOffset(offsetRef.current) - open.started_at : 0;
   const todaySec = (status?.worked_sec ?? 0) + (open ? liveSec : 0);
   const clock = formatClock(open ? liveSec : 0);
-  const remain = Math.max(0, DAILY_TARGET_SEC - todaySec);
-  const pct = Math.min(100, (todaySec / DAILY_TARGET_SEC) * 100);
+  const remain = Math.max(0, targetSec - todaySec);
+  const pct = Math.min(100, (todaySec / targetSec) * 100);
   const name = user?.name || "";
 
   return (
@@ -64,7 +65,7 @@ export default function EmployeeScreen({ api, user }) {
           </div>
           <div className="timer" aria-live="off">{clock.h}:{clock.mm}<span className="sec">:{clock.ss}</span></div>
           <div className="hero-meta">
-            <div>ساعات اليوم المطلوبة<strong className="ltr">{formatHours(DAILY_TARGET_SEC)}</strong></div>
+            <div>ساعات اليوم المطلوبة<strong className="ltr">{formatHours(targetSec)}</strong></div>
             <div>المتبقي<strong className="ltr">{remain > 0 ? formatHours(remain) : "اكتملت"}</strong></div>
             <div>مجموع اليوم<strong className="ltr">{formatHours(todaySec)}</strong></div>
           </div>

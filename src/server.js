@@ -255,6 +255,15 @@ app.get("/me/status", authed, async (c) => {
   return c.json({ open_session: open[0] ?? null, worked_sec: Number(total[0].worked_sec), server_time: t });
 });
 
+app.get("/me/settings", authed, async (c) => {
+  const st = await getSettings(c.get("claims").loc);
+  return c.json({
+    daily_target_hours: Number(st?.daily_target_hours ?? 8),
+    timezone: st?.timezone ?? "Asia/Riyadh",
+    work_start: st?.work_start ?? null,
+  });
+});
+
 app.post("/session/start", authed, async (c) => {
   const { uid, loc } = c.get("claims");
   await autoCloseStale(loc);
