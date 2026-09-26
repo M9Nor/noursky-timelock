@@ -25,4 +25,16 @@ describe("SettingsPanel", () => {
     wrap(<SettingsPanel api={api} />);
     expect(await screen.findByLabelText("سماح التأخير (دقائق)")).toBeInTheDocument();
   });
+  it("does not send 0 when the grace field is cleared", async () => {
+    const api = {
+      get: vi.fn(async () => ({ timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15 })),
+      put: vi.fn(async () => ({ timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15 })),
+    };
+    wrap(<SettingsPanel api={api} />);
+    const grace = await screen.findByLabelText("سماح التأخير (دقائق)");
+    fireEvent.change(grace, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(api.put.mock.calls[0][1].late_grace_minutes).toBe(15);
+  });
 });

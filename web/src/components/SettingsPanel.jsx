@@ -20,7 +20,11 @@ export default function SettingsPanel({ api }) {
         daily_target_hours: Number(s.daily_target_hours),
         max_session_hours: Number(s.max_session_hours),
         work_start: s.work_start || null,
-        late_grace_minutes: Number(s.late_grace_minutes ?? 15),
+        // An emptied field is "" — Number("") is 0, which would silently mean
+        // "late one second after work_start". Treat empty/absent as the default.
+        late_grace_minutes: s.late_grace_minutes === "" || s.late_grace_minutes == null
+          ? 15
+          : Number(s.late_grace_minutes),
       });
       setS(saved); toast("تم الحفظ");
     } catch (e) {
