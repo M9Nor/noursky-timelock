@@ -340,21 +340,37 @@ app.get("/admin/report", authed, managerOnly, async (c) => {
   const lateAfterSec = ws
     ? Number(ws.slice(0, 2)) * 3600 + Number(ws.slice(3, 5)) * 60 + graceSec
     : null;
+  // Resolve the offset at an exact second: tzOffsetSec() compares a second-truncated
+  // formatted time against a Date that still carries milliseconds, so passing a Date
+  // with a millisecond part makes it report 1 second too little (see task-3-report).
+  const off = tzOffsetSec(tz, new Date(now() * 1000));
+
+  // late_days: the spec defines lateness by the employee's FIRST session of the local
+  // DAY. Scoped to the local days the range covers and deliberately NOT to the raw
+  // :from/:to instants, so a day's true first session is always seen even when the UI's
+  // rolling (non-midnight-aligned) window starts after it.
+  const lateDaysByUser = new Map();
+  if (lateAfterSec !== null) {
+    const firstPerDay = await q(
+      `SELECT s.user_id, MIN(s.started_at) AS first_started_at
+         FROM sessions s
+        WHERE s.location_id = :loc
+          AND DATE(FROM_UNIXTIME(s.started_at + :off))
+              BETWEEN DATE(FROM_UNIXTIME(:from + :off)) AND DATE(FROM_UNIXTIME(:to - 1 + :off))
+        GROUP BY s.user_id, DATE(FROM_UNIXTIME(s.started_at + :off))`,
+      { loc, off, from, to }
+    );
+    for (const r of firstPerDay) {
+      const localTod = (((Number(r.first_started_at) + off) % 86400) + 86400) % 86400;
+      if (localTod > lateAfterSec) lateDaysByUser.set(r.user_id, (lateDaysByUser.get(r.user_id) ?? 0) + 1);
+    }
+  }
 
   const employees = await q(
     `SELECT e.user_id, e.name, e.email,
             COALESCE(SUM(${WORKED_EXPR}), 0)                                 AS worked_sec,
             COUNT(s.id)                                                      AS sessions_count,
             COUNT(DISTINCT DATE(FROM_UNIXTIME(s.started_at + :off)))         AS days_present,
-            COUNT(DISTINCT CASE
-              WHEN :lateAfter IS NOT NULL
-               AND s.started_at + :off = (
-                     SELECT MIN(s2.started_at + :off) FROM sessions s2
-                      WHERE s2.user_id = s.user_id AND s2.location_id = s.location_id
-                        AND DATE(FROM_UNIXTIME(s2.started_at + :off)) = DATE(FROM_UNIXTIME(s.started_at + :off))
-                   )
-               AND TIME_TO_SEC(TIME(FROM_UNIXTIME(s.started_at + :off))) > :lateAfter
-              THEN DATE(FROM_UNIXTIME(s.started_at + :off)) END)          AS late_days,
             COALESCE(SUM(CASE WHEN s.closed_by = 'auto' THEN 1 ELSE 0 END), 0) AS auto_closed
        FROM employees e
        LEFT JOIN sessions s
@@ -363,14 +379,18 @@ app.get("/admin/report", authed, managerOnly, async (c) => {
       WHERE e.location_id = :loc AND e.is_active = 1
       GROUP BY e.user_id, e.name, e.email
       ORDER BY worked_sec DESC`,
-    { now: now(), to, from, off: tzOffsetSec(tz), lateAfter: lateAfterSec, loc }
+    { now: now(), to, from, off, loc }
   );
 
   return c.json({
     from, to, timezone: tz,
     daily_target_hours: st?.daily_target_hours ?? 8,
     work_start: ws,
-    employees: employees.map((r) => ({ ...r, worked_sec: Number(r.worked_sec) })),
+    employees: employees.map((r) => ({
+      ...r,
+      worked_sec: Number(r.worked_sec),
+      late_days: lateDaysByUser.get(r.user_id) ?? 0,
+    })),
   });
 });
 

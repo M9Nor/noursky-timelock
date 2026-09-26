@@ -105,6 +105,29 @@ check("invalid timezone → 400",
 const csv = await call(M, "GET", `/admin/export.csv?from=${t - 86400}&to=${t + 10}`);
 check("CSV contains Arabic name", csv.status === 200 && String(csv.body).includes("أحمد"));
 
+// --- late_days must count a day whose FIRST session is after work_start + grace,
+// --- even when a rolling window starts after that first session (Finding 2 regression).
+const lateEmp = await sso({ userId: `${LOC}-u2`, role: "user", type: "account", activeLocation: LOC, userName: "متأخر", email: "l@x.com" });
+const L = lateEmp.body.token;
+await call(L, "POST", "/session/start"); await call(L, "POST", "/session/stop");
+await call(L, "POST", "/session/start"); await call(L, "POST", "/session/stop");
+const mine = await call(M, "GET", `/admin/sessions?from=${t - 86400}&to=${t + 10}&user_id=${LOC}-u2`);
+const ids = (mine.body?.sessions ?? []).map((x) => x.id);
+// Pin both to yesterday (UTC day, so local day == UTC day): 10:00-11:00 then 14:00-15:00.
+const dayStart = Math.floor(t / 86400) * 86400 - 86400;
+const firstStart = dayStart + 10 * 3600, secondStart = dayStart + 14 * 3600;
+const pinned = ids.length === 2
+  && (await call(M, "PATCH", `/admin/sessions/${ids[0]}`, { started_at: firstStart, ended_at: firstStart + 3600, reason: "تثبيت وقت للاختبار" })).status === 200
+  && (await call(M, "PATCH", `/admin/sessions/${ids[1]}`, { started_at: secondStart, ended_at: secondStart + 3600, reason: "تثبيت وقت للاختبار" })).status === 200;
+check("late-days fixture pinned to known times", pinned, `(ids ${ids.length})`);
+// work_start 00:00 + 0 grace ⇒ the 10:00 first session is unambiguously late.
+await call(M, "PUT", "/admin/settings", { timezone: "UTC", daily_target_hours: 8, max_session_hours: 12, work_start: "00:00", late_grace_minutes: 0 });
+// Rolling window starting at 12:00 — after the first session, before the second.
+const lateRep = await call(M, "GET", `/admin/report?from=${dayStart + 12 * 3600}&to=${t + 10}`);
+const lateRow = lateRep.body?.employees?.find((e) => e.user_id === `${LOC}-u2`);
+check("report counts a late first session outside the window", lateRow && lateRow.late_days >= 1,
+  `(got ${JSON.stringify(lateRow?.late_days)})`);
+
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
 
 // --- dev-login (only meaningful when the target server runs with NODE_ENV != production) ---
