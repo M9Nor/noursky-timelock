@@ -87,6 +87,11 @@ const list = await call(M, "GET", `/admin/sessions?from=${t - 86400}&to=${t + 10
 const sid = list.body?.sessions?.[0]?.id;
 check("sessions list", !!sid);
 
+const mySessions = await call(E, "GET", "/me/sessions?days=7");
+check("employee sees own sessions", mySessions.status === 200 && Array.isArray(mySessions.body?.sessions) && mySessions.body.sessions.length >= 1);
+const mgrMine = await call(M, "GET", "/me/sessions?days=7");
+check("manager's own history excludes the employee's rows", (mgrMine.body?.sessions ?? []).length === 0);
+
 check("edit without reason → 400",
   (await call(M, "PATCH", `/admin/sessions/${sid}`, { started_at: t - 7200, ended_at: t - 3600 })).status === 400);
 const edit = await call(M, "PATCH", `/admin/sessions/${sid}`, { started_at: t - 7200, ended_at: t - 3600, reason: "نسي يسجل" });

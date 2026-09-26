@@ -264,6 +264,23 @@ app.get("/me/settings", authed, async (c) => {
   });
 });
 
+app.get("/me/sessions", authed, async (c) => {
+  const { uid, loc } = c.get("claims");
+  await autoCloseStale(loc);
+  const days = intParam(c, "days", 7);
+  if (days < 1 || days > 31) throw new HttpError(400, "INVALID_DAYS");
+  const from = now() - days * 86400;
+  const sessions = await q(
+    `SELECT id, started_at, ended_at, duration_sec, closed_by
+       FROM sessions
+      WHERE user_id = :uid AND location_id = :loc AND started_at >= :from
+      ORDER BY started_at DESC
+      LIMIT 100`,
+    { uid, loc, from }
+  );
+  return c.json({ sessions });
+});
+
 app.post("/session/start", authed, async (c) => {
   const { uid, loc } = c.get("claims");
   await autoCloseStale(loc);

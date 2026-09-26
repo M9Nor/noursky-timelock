@@ -11,6 +11,9 @@ function makeApi(status, settings = { daily_target_hours: 8, timezone: "Asia/Riy
       if (settingsError) return Promise.reject(settingsError);
       return Promise.resolve(settings);
     }
+    if (path && path.startsWith("/me/sessions")) {
+      return Promise.resolve({ sessions: [] });
+    }
     return Promise.resolve(status);
   });
   return {

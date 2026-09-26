@@ -3,6 +3,7 @@ import Button from "./Button.jsx";
 import Icon from "./Icon.jsx";
 import { useToast } from "./ToastContext.jsx";
 import { formatClock, formatHours, serverOffset, nowWithOffset } from "../time.js";
+import MyHistory from "./MyHistory.jsx";
 
 export default function EmployeeScreen({ api, user }) {
   const [status, setStatus] = useState(null);
@@ -94,6 +95,8 @@ export default function EmployeeScreen({ api, user }) {
         <div className="panel-h"><h2>ساعاتي هذا الأسبوع</h2></div>
         <p className="hero-meta"><span>المجموع<strong className="ltr">{formatHours(weekSec)}</strong></span></p>
       </section>
+
+      <MyHistory api={api} />
 
       {error && <div className="panel error">حدث خطأ، حاول مرة أخرى</div>}
     </div>
