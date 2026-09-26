@@ -18,9 +18,9 @@ _(overwrite each update)_
   from `work_start` + grace and shown per employee as "أيام التأخير" in the manager
   report, the employee daily target read from the account's real
   `daily_target_hours` instead of a hardcoded 8h, and a new "سجلّي — آخر 7 أيام"
-  panel showing the employee's own last-7-days session history. 44/44 frontend
-  Vitest tests pass; 31/31 backend smoke-test checks pass locally; production
-  build succeeds.
+  panel showing the employee's own last-7-days session history. The final
+  whole-branch review's four findings are fixed on top. 44/44 frontend Vitest tests
+  pass; 35/35 backend smoke-test checks pass locally; production build succeeds.
 - **Not done / broken:** GHL Marketplace app not yet created, so **real SSO login
   is not wired** — outside a GHL iframe the app shows the dev role-picker (dev build)
   or "session expired" (prod build). `GHL_SHARED_SECRET` on Hostinger is a temporary
@@ -57,11 +57,14 @@ _(overwrite each update)_
   (3) verify `/health` and the manager report's new column live. This is a decision
   for the project owner, not something to do unprompted.
 - Deferred items from phase 1, not to be lost:
-  - The 09:15:00 / 09:15:01 grace-boundary proof was run in a throwaway script, not
-    committed to the smoke suite.
-  - `late_days` counts a boundary day whose only session lies entirely outside
-    `[from, to)`, while `days_present` excludes it — a consequence of the mandated
-    day-based rule; worth a manager-facing caveat.
+  - ~~The 09:15:00 / 09:15:01 grace-boundary proof was run in a throwaway script, not
+    committed to the smoke suite.~~ **Fixed** in the final review pass: committed to
+    `scripts/smoke-test.mjs` on an `Asia/Dubai` fixture location (`work_start 09:00`,
+    grace 15), with best-effort cleanup of its rows.
+  - ~~`late_days` counts a boundary day whose only session lies entirely outside
+    `[from, to)`, while `days_present` excludes it.~~ **Fixed** in the final review
+    pass: an `EXISTS` subquery restricts the candidate days to days with at least one
+    session overlapping `[from, to)`, while `MIN(started_at)` stays unrestricted.
   - `tzOffsetSec()` returns an offset 1 second too small when
     `Date.now() % 1000 >= 500`. It was neutralised **inside the report handler
     only**; the shared helper is untouched. It currently has exactly one call site,
@@ -78,6 +81,21 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-09-26** · Fixed the four findings from the final whole-branch review of
+  `feature/attendance-policies-phase1`: (1) `late_days` no longer counts local days
+  with no session overlapping `[from, to)` — an `EXISTS` subquery narrows the candidate
+  days while `MIN(started_at)` stays unrestricted, so the `d55f10a` behaviour is kept
+  (reviewer's scenario: `late_days` 6 → 5 with `days_present` 5); (2) committed a real
+  grace-boundary smoke case on a non-UTC location (`Asia/Dubai`, `work_start 09:00`,
+  grace 15) asserting local 09:15:00 is on time and 09:15:01 is late, plus best-effort
+  cleanup of its fixture rows — proven to fail against the pre-fix code path;
+  (3) `PUT /admin/settings` now treats `undefined`/`null`/`""` grace as the 15-minute
+  default server-side, while an explicit `0` is still honoured and 0–240 validation is
+  intact; (4) the `/me/sessions` isolation check now requires `status === 200`.
+  44/44 frontend tests, 35/35 smoke checks (was 31). Local only — no migration, no
+  push, no deploy. · files: `src/server.js`, `scripts/smoke-test.mjs`,
+  `docs/PROGRESS.md`, `.superpowers/sdd/2026-09-24-attendance-policies-phase1/final-fix-report.md`
+  · commit: _(this fix pass)_
 - **2026-09-24** · Attendance policies phase 1 (Tasks 1–5): `late_grace_minutes`
   setting (validated 0–240, `INVALID_GRACE`); `GET /me/settings` + employee daily
   target read from real `daily_target_hours` (settings fetch moved to its own

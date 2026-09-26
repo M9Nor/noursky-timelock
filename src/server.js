@@ -363,9 +363,14 @@ app.get("/admin/report", authed, managerOnly, async (c) => {
   const off = tzOffsetSec(tz, new Date(now() * 1000));
 
   // late_days: the spec defines lateness by the employee's FIRST session of the local
-  // DAY. Scoped to the local days the range covers and deliberately NOT to the raw
-  // :from/:to instants, so a day's true first session is always seen even when the UI's
-  // rolling (non-midnight-aligned) window starts after it.
+  // DAY, and counts it "only on days with attendance" (spec §5.1). Two separate scopes:
+  //   - MIN(started_at) is NOT restricted to [:from, :to), so a day's true first session
+  //     is always seen even when the UI's rolling (non-midnight-aligned) window starts
+  //     after it;
+  //   - the candidate DAYS are restricted by EXISTS to local days on which the employee
+  //     has at least one session overlapping [:from, :to) — the same overlap predicate
+  //     days_present uses below. Without it a day whose only session ends before :from
+  //     still produced a late day, so late_days could exceed days_present.
   const lateDaysByUser = new Map();
   if (lateAfterSec !== null) {
     const firstPerDay = await q(
@@ -374,6 +379,15 @@ app.get("/admin/report", authed, managerOnly, async (c) => {
         WHERE s.location_id = :loc
           AND DATE(FROM_UNIXTIME(s.started_at + :off))
               BETWEEN DATE(FROM_UNIXTIME(:from + :off)) AND DATE(FROM_UNIXTIME(:to - 1 + :off))
+          AND EXISTS (
+                SELECT 1
+                  FROM sessions p
+                 WHERE p.location_id = s.location_id
+                   AND p.user_id = s.user_id
+                   AND DATE(FROM_UNIXTIME(p.started_at + :off))
+                       = DATE(FROM_UNIXTIME(s.started_at + :off))
+                   AND p.started_at < :to AND (p.ended_at IS NULL OR p.ended_at > :from)
+              )
         GROUP BY s.user_id, DATE(FROM_UNIXTIME(s.started_at + :off))`,
       { loc, off, from, to }
     );
@@ -511,7 +525,11 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   const target = Number(b.daily_target_hours), max = Number(b.max_session_hours);
   if (!(target > 0 && target <= 24) || !(max >= 1 && max <= 24)) throw new HttpError(400, "INVALID_HOURS");
   if (b.work_start && !/^([01]\d|2[0-3]):[0-5]\d$/.test(b.work_start)) throw new HttpError(400, "INVALID_WORK_START");
-  const grace = b.late_grace_minutes === undefined ? 15 : Number(b.late_grace_minutes);
+  // Absent / null / empty-string grace falls back to the 15-minute default: an emptied
+  // UI field arrives as "" and Number("") === 0, which would silently make the policy
+  // "late one second after work_start". An explicit numeric 0 still means "no grace".
+  const rawGrace = b.late_grace_minutes;
+  const grace = rawGrace === undefined || rawGrace === null || rawGrace === "" ? 15 : Number(rawGrace);
   if (!Number.isInteger(grace) || grace < 0 || grace > 240) throw new HttpError(400, "INVALID_GRACE");
 
   await q(
