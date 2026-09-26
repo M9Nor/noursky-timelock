@@ -198,6 +198,10 @@ h3{margin:0; font-size:15px; font-weight:600}
 .search svg{position:absolute; inset-inline-start:10px; top:50%; transform:translateY(-50%); color:var(--muted); width:18px; height:18px}
 .table-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:var(--r-sm)}
 table{width:100%; border-collapse:collapse; min-width:820px}
+/* The employee history spans the full row and has only four narrow columns,
+   so it must not inherit the manager report's 820px minimum. */
+.my-history{grid-column:1/-1}
+.my-history table{min-width:380px}
 th{background:var(--head); color:var(--head-ink); font-size:13px; font-weight:600; text-align:right; padding:11px 14px; white-space:nowrap}
 td{padding:11px 14px; border-top:1px solid var(--line); font-size:14px; white-space:nowrap}
 tbody tr:nth-child(even) td{background:var(--sunken)}

@@ -17,11 +17,11 @@ export default function MyHistory({ api }) {
       .catch(() => setError("حدث خطأ، حاول مرة أخرى"));
   }, []);
 
-  if (error) return <section className="panel error">{error}</section>;
-  if (!sessions) return <section className="panel muted">جارٍ التحميل…</section>;
+  if (error) return <section className="panel my-history error">{error}</section>;
+  if (!sessions) return <section className="panel my-history muted">جارٍ التحميل…</section>;
 
   return (
-    <section className="panel">
+    <section className="panel my-history">
       <div className="panel-h"><h2>سجلّي — آخر 7 أيام</h2></div>
       {sessions.length ? (
         <div className="table-wrap">
