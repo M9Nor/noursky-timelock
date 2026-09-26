@@ -5,6 +5,14 @@ Format: **Date — Decision** · Reason · Alternatives rejected.
 
 ---
 
+### 2026-09-24 — سياسات الدوام تُضبط لكل حساب، لا تُفرض على الجميع
+`work_start` + `late_grace_minutes` يحسبان التأخير، والهدف اليومي يُقرأ من إعدادات
+الحساب بدل رقم ثابت بالواجهة.
+- **السبب:** الأداة منتج لعدة شركات باختلاف أنماط عملها؛ ما يناسب فريقاً مكتبياً لا
+  يناسب فريقاً عن بُعد. جعل السياسة إعداداً يغطي الجميع بنواة واحدة.
+- **المرفوض:** التتبع التلقائي بالنشاط (يقيس فتح التبويب لا العمل)، وGPS/Geofence
+  (كلفة خصوصية بلا فائدة لفرق مكتبية ومبيعات).
+
 ### 2026-09-19 — Shared project-context system lives in the repo
 Store all cross-session context in `CLAUDE.md` + `docs/PROGRESS.md` + `docs/DECISIONS.md`,
 with `/handoff` and `/resume` slash commands and a SessionStart hook.
