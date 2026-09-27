@@ -4,21 +4,23 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `main` — phase 2 merged and deployed. Migration 002 was applied to
-  production on 2026-09-27 before the push (every worked-time query reads `breaks`).
-- **Works:** everything from phase 1, plus manager-controlled **breaks**
-  (pause counting without ending the session; one open break per session enforced by the
-  DB; a break can always be ended) and a **note on stop** policy (off / optional /
-  required, enforced server-side, max 500). Worked time = duration − breaks, computed on
-  read and clipped to session and window. Shown in: employee screen (break button, frozen
-  clock, note dialog), settings, manager session detail (break + note columns), live floor
-  (on-break state), employee history (hours without breaks), CSV (Hours = worked, Break
-  (min), Note; formula-injection guard). Also fixed: the employee screen double-counted a
-  session already running when the page opened.
-- **Tests:** 80/80 frontend, 66/66 smoke (local MariaDB 11), 8/8 unit; build ok.
-- **Known minors (parked, see DECISIONS / the phase-2 ledger):** Escape during an in-flight
-  stop can hide a failure; `BREAK_ALREADY_OPEN` shows the generic message; no Tab focus
-  trap in the note dialog; correlated subquery inside `SUM()` untested on MySQL 8.
+- **Branch:** `feature/break-modes` — complete, reviewed, **not yet merged**. `main` (live) has
+  phase 2 (flexible breaks + note on stop). **Merge is gated on applying
+  `migrations/003_break_modes.sql` to production first** (the new code reads `break_mode`,
+  `break_policy_since` and `breaks.kind`).
+- **Works (on the branch):** everything on `main`, plus a manager `break_mode` setting:
+  `off` / `fixed` (daily HH:MM window in the location timezone, paid or unpaid, no button)
+  / `flexible` (the employee button). Unpaid fixed windows are recorded as `breaks` rows
+  (`kind='fixed'`) — at most one per session per local day, only for windows starting
+  after the policy was saved (`break_policy_since`) — so reports, detail, CSV and history
+  deduct them and past days never change. Employee screen and live floor show today's
+  window; the live clock pauses during an unpaid one (`liveTotals()` in `web/src/time.js`).
+- **Tests:** unit 15/15, frontend 90/90, smoke 93/93 (local MariaDB 11; SQL also checked on
+  MySQL 8); build ok.
+- **Known minors (parked):** one-per-day is per session, not per employee; `/admin/live`
+  shows the policy window rather than each employee's recorded one after a same-day move;
+  flexible→fixed switch mid-break can overlap once; employee screen doesn't re-poll past
+  midnight.
 
 ## In Progress
 - Nothing mid-flight. The frontend redesign (spec `docs/superpowers/specs/2026-09-19-frontend-redesign-design.md`,
@@ -73,6 +75,17 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-09-28** · **Break modes** on `feature/break-modes` (plan
+  `docs/superpowers/plans/2026-09-27-break-modes.md`, spec §5.4b, subagent-driven, 5 tasks
+  + final review). Migration 003 (`settings.break_mode/break_start/break_end/break_paid/
+  break_policy_since`, `breaks.kind` + generated `fixed_key` + `ux_fixed_window`); tz
+  helpers `localDate`/`wallToUtc`/`fixedWindows`/`localDayBounds`; unpaid fixed windows
+  recorded by `autoCloseStale`, PUT and PATCH (newly covered windows only, in the txn);
+  `/me/status` + `/admin/live` expose the window; settings UI; employee/live-floor pause.
+  Review fixes: a same-day window change double-deducted pay (now one row per session per
+  local day), PUT records begun windows before changing policy, policy applies from save,
+  CSV Hours clamped. Unit 15, frontend 90, smoke 93. Not merged — waiting on production
+  migration 003.
 - **2026-09-27** · Attendance policies **phase 2** on `feature/attendance-policies-phase2`
   (plan `docs/superpowers/plans/2026-09-27-attendance-policies-phase2.md`, subagent-driven,
   6 tasks + final review). Migration 002 (`breaks` table, `sessions.note`,

@@ -5,6 +5,25 @@ Format: **Date — Decision** · Reason · Alternatives rejected.
 
 ---
 
+### 2026-09-28 — Break modes: fixed windows are recorded, not computed
+Breaks became one setting, `break_mode` = off / fixed / flexible (owner-approved). An unpaid
+fixed window is written as a `breaks` row (`kind='fixed'`) once it begins for an open
+session (or a manager edit newly covers it), instead of being computed on read from the
+current policy.
+- **Reason:** payroll history must not move when a manager changes the lunch hour. Stored
+  rows also reuse every existing worked-time query, clipping and CSV path unchanged.
+- **Rules:** at most one fixed row per session per local day (first recorded wins — a
+  same-day window change otherwise double-deducts permanently); a policy applies only to
+  windows starting after it was saved (`break_policy_since`); PUT and PATCH record begun
+  windows before changing anything; recorded fixed rows can't be removed from the UI.
+  Unpaid means deducted even if the employee worked through it (standard auto-deduct);
+  paid deducts nothing and is shown for information.
+- **Kept for the deploy window:** `breaks_enabled` stays in sync with `break_mode =
+  'flexible'`, and a body with only `breaks_enabled: true` maps to `flexible`.
+- **Rejected:** computing fixed deductions on read (retroactive on every policy change);
+  a paid/unpaid-only toggle with no window (the paid case alone tracks nothing); storing a
+  per-session total (breaks the report's window clipping).
+
 ### 2026-09-27 — Breaks and note on stop: computed on read, enforced by the server
 - **Worked time is never stored.** `duration_sec` keeps its meaning (wall-clock length);
   `break_sec` is computed on read and every worked-time sum subtracts breaks clipped to the
