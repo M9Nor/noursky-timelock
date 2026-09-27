@@ -17,9 +17,9 @@ _(overwrite each update)_
   `late_by_sec` from `GET /admin/sessions`; drill-down times now render in the
   location timezone. Verified live inside GHL (Innova): the 3 late days match the
   count. 54/54 frontend tests, 38/38 smoke checks locally.
-- **Not done / known minors:** see Next Steps (tzOffsetSec 1-second bug, DST offset
-  snapshot, no committed migration file). "سجلّي" now renders in the company timezone
-  (`893196e`), and the production `smoke-%` / `dev-local` test rows were removed.
+- **Not done / known minors:** none open from phase 1. Local-day math is DST-safe
+  (`src/tz.js`), `tzOffsetSec` is exact, and schema upgrades now live in `migrations/`.
+  "سجلّي" renders in the company timezone and production test rows were removed.
 
 ## In Progress
 - Nothing mid-flight. The frontend redesign (spec `docs/superpowers/specs/2026-09-19-frontend-redesign-design.md`,
@@ -74,6 +74,15 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-09-27** · Closed the three phase-1 minors. (1) `tzOffsetSec` truncates to whole
+  seconds itself (was 1s short with a millisecond Date); call-site workaround removed.
+  (2) DST: report `late_days`/`days_present` and `/admin/sessions` `late_by_sec` now use
+  each date's own offset via `localZone()` in new `src/tz.js` (SQL `CASE` per offset
+  change in the window), plus a 2-day-padded `started_at` pre-filter so the index is
+  used. Smoke fixture on Europe/Berlin (08:30 CET vs 09:30 CEST) failed on the old code
+  (late_days 2) and passes now (1). (3) `migrations/` with `001_late_grace_minutes.sql`
+  + README (applied log, deploy order). New `npm run test:unit` (node:test, 8 tests).
+  8/8 unit, 56/56 frontend, 41/41 smoke. Decision recorded in DECISIONS.md.
 - **2026-09-27** · (1) "سجلّي" rendered times with the device clock; `GET /me/sessions`
   now returns the location `timezone` and `MyHistory` formats with `formatStamp`
   (new `{ year: false }` compact form). The ReportPanel timezone test used

@@ -5,6 +5,23 @@ Format: **Date — Decision** · Reason · Alternatives rejected.
 
 ---
 
+### 2026-09-27 — Local days use the offset in force on each date (DST-safe)
+Report `late_days`/`days_present` and the per-session `late_by_sec` map every timestamp
+with the UTC offset in force at that instant. `src/tz.js` finds the offset changes inside
+the query window (daily step + bisection, capped at ~10 years) and emits a SQL
+`CASE WHEN col >= <change> THEN <off> … END`; with no change it is a plain number, so the
+common case is unchanged. Queries also gained a sargable `started_at` pre-filter padded
+by two days so the `(location_id, started_at)` index narrows the scan first.
+- **Reason:** a single offset snapshot taken "now" shifted every session on the far side
+  of a DST change by an hour — a 08:30 winter arrival in Berlin was reported as a 09:30
+  late one. Any client in a DST zone would see wrong lateness.
+- **Rejected:** MySQL `CONVERT_TZ()` with named zones (needs the tz tables loaded, not
+  guaranteed on Hostinger's shared MariaDB); pulling all rows into JS to bucket by day
+  (moves aggregation out of SQL and grows with history).
+- Also fixed `tzOffsetSec()` at the source (it compared whole-second Intl output with a
+  millisecond-carrying Date and could return 1 second short), removing the call-site
+  workaround in the report handler.
+
 ### 2026-09-24 — سياسات الدوام تُضبط لكل حساب، لا تُفرض على الجميع
 `work_start` + `late_grace_minutes` يحسبان التأخير، والهدف اليومي يُقرأ من إعدادات
 الحساب بدل رقم ثابت بالواجهة.

@@ -25,7 +25,9 @@ MySQL/MariaDB database, deployed on **Hostinger Cloud (managed Node.js)** at
 ## Folder structure
 ```
 src/server.js            # entire backend API (Hono + mysql2): auth/SSO, sessions, admin, static serving
+src/tz.js                # timezone math: per-date offsets (DST-safe), local-day SQL expressions
 schema.sql               # DB schema (4 tables) — run once via phpMyAdmin import
+migrations/              # numbered upgrade scripts for existing DBs (see migrations/README.md)
 scripts/smoke-test.mjs   # end-to-end backend smoke test (simulates GHL SSO)
 scripts/build-web.mjs    # postinstall/build: installs web/ dev deps + vite build → public/
 web/                     # React + Vite SPA (source of the UI)
@@ -59,6 +61,9 @@ npm run build
 # Frontend unit tests (no DB needed — API is mocked)
 cd web && npx vitest run
 
+# Backend unit tests (timezone math; no DB needed)
+npm run test:unit
+
 # Backend smoke test (needs a running server + DB)
 BASE_URL=http://localhost:3000 GHL_SHARED_SECRET=<same-as-.env> npm run test:smoke
 
@@ -79,6 +84,8 @@ BASE_URL=http://localhost:3000 GHL_SHARED_SECRET=<same-as-.env> npm run test:smo
   the app with `npm start` (entry `src/server.js`). Node version 20.x.
 - `public/` is gitignored and produced at deploy time — do NOT commit it.
 - DB lives on the same Hostinger account (MySQL). Schema is imported once via phpMyAdmin.
+- Schema changes: add the column to `schema.sql` AND a numbered file in `migrations/`;
+  apply it in phpMyAdmin **before** pushing code that uses it (`/health` won't catch it).
 - Health check after deploy: `GET https://timeclock.noursky.com/health` → `{"ok":true}`.
 - **Context-only commits** (docs/**, CLAUDE.md) should not trigger a rebuild — a
   `paths-ignore` note is in DECISIONS.md; Hostinger's Git deploy does not currently
