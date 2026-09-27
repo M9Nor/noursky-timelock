@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration, formatHours, serverOffset, formatClock, formatLateness, formatStamp, formatBreak } from "./time.js";
+import { formatDuration, formatHours, serverOffset, formatClock, formatLateness, formatStamp, formatBreak, liveTotals } from "./time.js";
 
 describe("time helpers", () => {
   it("formats duration as H:MM:SS with Western digits", () => {
@@ -86,5 +86,35 @@ describe("formatBreak", () => {
   it("is empty when there was no break", () => {
     expect(formatBreak(0)).toBe("");
     expect(formatBreak(null)).toBe("");
+  });
+});
+
+describe("liveTotals", () => {
+  const t = 1_000_000;
+  const base = { open_session: { id: "s", started_at: t - 3600, break_sec: 0 }, open_break: null, worked_sec: 3600, server_time: t, fixed_break: null };
+
+  it("adds only the seconds since server_time (no double count)", () => {
+    expect(liveTotals(base, t + 60)).toMatchObject({ sessionSec: 3660, todaySec: 3660, onBreak: false, inFixed: false });
+  });
+
+  it("freezes during an employee break", () => {
+    const s = { ...base, open_session: { ...base.open_session, break_sec: 600 }, open_break: { id: "b", started_at: t - 600 }, worked_sec: 3000 };
+    expect(liveTotals(s, t + 900)).toMatchObject({ sessionSec: 3000, todaySec: 3000, onBreak: true });
+  });
+
+  it("pauses for the part of an unpaid fixed window after server_time", () => {
+    const s = { ...base, fixed_break: { starts_at: t + 60, ends_at: t + 660, paid: false } };
+    expect(liveTotals(s, t + 300)).toMatchObject({ todaySec: 3600 + 60, inFixed: true });
+    expect(liveTotals(s, t + 900)).toMatchObject({ sessionSec: 3600 + 300, todaySec: 3600 + 300, inFixed: false });
+  });
+
+  it("keeps counting through a paid fixed window", () => {
+    const s = { ...base, fixed_break: { starts_at: t + 60, ends_at: t + 660, paid: true } };
+    expect(liveTotals(s, t + 300)).toMatchObject({ todaySec: 3900, inFixed: true });
+  });
+
+  it("is all zeros with no open session", () => {
+    expect(liveTotals({ open_session: null, open_break: null, worked_sec: 120, server_time: t, fixed_break: null }, t + 50))
+      .toMatchObject({ sessionSec: 0, todaySec: 120, inFixed: false });
   });
 });

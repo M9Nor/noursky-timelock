@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Button from "./Button.jsx";
 import Icon from "./Icon.jsx";
 import { useToast } from "./ToastContext.jsx";
-import { formatClock, formatHours, serverOffset, nowWithOffset } from "../time.js";
+import { formatClock, formatHours, serverOffset, nowWithOffset, liveTotals } from "../time.js";
 import MyHistory from "./MyHistory.jsx";
 import StopNoteDialog from "./StopNoteDialog.jsx";
 
@@ -22,7 +22,7 @@ export default function EmployeeScreen({ api, user }) {
   const [noteError, setNoteError] = useState("");
   const [, setTick] = useState(0);
   const [targetSec, setTargetSec] = useState(8 * 3600);
-  const [policy, setPolicy] = useState({ breaks_enabled: false, note_on_stop: "off" });
+  const [policy, setPolicy] = useState({ break_mode: "off", break_start: null, break_end: null, break_paid: false, note_on_stop: "off" });
   const [askNote, setAskNote] = useState(false);
   const offsetRef = useRef(0);
   const toast = useToast();
@@ -43,7 +43,14 @@ export default function EmployeeScreen({ api, user }) {
       try {
         const cfg = await api.get("/me/settings");
         setTargetSec(Number(cfg.daily_target_hours) * 3600);
-        setPolicy({ breaks_enabled: Boolean(cfg.breaks_enabled), note_on_stop: cfg.note_on_stop ?? "off" });
+        setPolicy({
+          // Older API responses only carry breaks_enabled.
+          break_mode: cfg.break_mode ?? (cfg.breaks_enabled ? "flexible" : "off"),
+          break_start: cfg.break_start ?? null,
+          break_end: cfg.break_end ?? null,
+          break_paid: Boolean(cfg.break_paid),
+          note_on_stop: cfg.note_on_stop ?? "off",
+        });
       } catch {
         // Settings are a convenience here: fall back to an 8-hour target, no break
         // button and no note prompt. The server still enforces a required note.
@@ -116,19 +123,16 @@ export default function EmployeeScreen({ api, user }) {
   if (!status && !error) return <div className="panel muted">جارٍ التحميل…</div>;
 
   const open = status?.open_session;
-  const onBreak = Boolean(status?.open_break);
-  // The server's numbers are exact at server_time. The client only adds the seconds
-  // elapsed since then, and adds nothing while a break is running.
-  const sinceSnapshot = open && !onBreak ? Math.max(0, nowWithOffset(offsetRef.current) - status.server_time) : 0;
-  const sessionSec = open ? status.server_time - open.started_at - (open.break_sec ?? 0) + sinceSnapshot : 0;
-  const todaySec = (status?.worked_sec ?? 0) + sinceSnapshot;
+  const { sessionSec, todaySec, onBreak, inFixed } = liveTotals(status, nowWithOffset(offsetRef.current));
   const clock = formatClock(sessionSec);
   const remain = Math.max(0, targetSec - todaySec);
   const pct = Math.min(100, (todaySec / targetSec) * 100);
   const name = user?.name || "";
-  const [chipClass, chipText] = onBreak ? ["break", "في استراحة"] : open ? ["work", "داخل الدوام"] : ["off", "لم يسجّل الدخول"];
-  // An employee already on a break can always end it, even if breaks were switched off.
-  const showBreak = open && (policy.breaks_enabled || onBreak);
+  const [chipClass, chipText] = onBreak ? ["break", "في استراحة"]
+    : inFixed ? ["break", "وقت الاستراحة"]
+    : open ? ["work", "داخل الدوام"] : ["off", "لم يسجّل الدخول"];
+  // An employee already on a break can always end it, even if the mode changed since.
+  const showBreak = open && (policy.break_mode === "flexible" || onBreak);
 
   return (
     <div className="grid emp">
@@ -147,6 +151,9 @@ export default function EmployeeScreen({ api, user }) {
           <div className="goal" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)}>
             <i style={{ width: pct + "%" }} />
           </div>
+          {policy.break_mode === "fixed" && policy.break_start && policy.break_end && (
+            <p className="hint">الاستراحة <span className="ltr">{policy.break_start}–{policy.break_end}</span> · {policy.break_paid ? "مدفوعة" : "غير مدفوعة"}</p>
+          )}
         </div>
         <div className="actions">
           <Button onClick={toggle} loading={loading} variant={open ? "danger" : "primary"} size="lg">

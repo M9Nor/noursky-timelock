@@ -22,6 +22,9 @@ export default function LiveFloor({ api }) {
   }, []);
 
   if (!data) return <div className="panel muted">جارٍ التحميل…</div>;
+  const nowS = nowWithOffset(offsetRef.current);
+  const fb = data.fixed_break;
+  const inFixed = Boolean(fb && nowS >= fb.starts_at && nowS < fb.ends_at);
   const working = data.employees.filter((e) => e.session_id != null);
   const offline = data.employees.filter((e) => e.session_id == null);
   const lane = (label, people, live) => (
@@ -33,8 +36,10 @@ export default function LiveFloor({ api }) {
           <div style={{ minWidth: 0 }}>
             <div className="n">{p.name}</div>
             {live && (p.break_started_at
-              ? <div className="m break">استراحة · {formatDuration(nowWithOffset(offsetRef.current) - p.break_started_at)}</div>
-              : <div className="m">{formatDuration(nowWithOffset(offsetRef.current) - p.started_at)}</div>)}
+              ? <div className="m break">استراحة · {formatDuration(nowS - p.break_started_at)}</div>
+              : inFixed
+                ? <div className="m break">وقت الاستراحة</div>
+                : <div className="m">{formatDuration(nowS - p.started_at)}</div>)}
           </div>
         </div>
       )) : <div className="hint" style={{ textAlign: "center", padding: "12px 0" }}>لا أحد</div>}

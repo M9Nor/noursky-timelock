@@ -5,7 +5,7 @@ import EmployeeScreen from "./EmployeeScreen.jsx";
 
 const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
 
-const DEFAULT_SETTINGS = { daily_target_hours: 8, timezone: "Asia/Riyadh", work_start: null, breaks_enabled: false, note_on_stop: "off" };
+const DEFAULT_SETTINGS = { daily_target_hours: 8, timezone: "Asia/Riyadh", work_start: null, break_mode: "off", break_start: null, break_end: null, break_paid: false, note_on_stop: "off" };
 
 function makeApi(status, settings = DEFAULT_SETTINGS, settingsError = null, post = vi.fn(async () => ({}))) {
   const get = vi.fn((path) => {
@@ -92,7 +92,7 @@ describe("EmployeeScreen", () => {
     const t = nowSec();
     const api = makeApi(
       { open_session: { id: "s1", started_at: t - 3600, break_sec: 600 }, open_break: { id: "b1", started_at: t - 600 }, worked_sec: 3000, server_time: t },
-      { ...DEFAULT_SETTINGS, breaks_enabled: true }
+      { ...DEFAULT_SETTINGS, break_mode: "flexible" }
     );
     const { container } = wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
     expect(await screen.findByText("في استراحة")).toBeInTheDocument();
@@ -112,7 +112,7 @@ describe("EmployeeScreen", () => {
     const t = nowSec();
     const api = makeApi(
       { open_session: { id: "s1", started_at: t - 60, break_sec: 0 }, open_break: null, worked_sec: 60, server_time: t },
-      { ...DEFAULT_SETTINGS, breaks_enabled: true }
+      { ...DEFAULT_SETTINGS, break_mode: "flexible" }
     );
     wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
     fireEvent.click(await screen.findByRole("button", { name: /^استراحة$/ }));
@@ -205,7 +205,7 @@ describe("EmployeeScreen", () => {
     });
     const api = makeApi(
       { open_session: { id: "s1", started_at: t - 60, break_sec: 0 }, open_break: null, worked_sec: 60, server_time: t },
-      { ...DEFAULT_SETTINGS, breaks_enabled: true },
+      { ...DEFAULT_SETTINGS, break_mode: "flexible" },
       null, post
     );
     wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
@@ -234,5 +234,27 @@ describe("EmployeeScreen", () => {
     fireEvent.click(await screen.findByRole("button", { name: /إنهاء الدوام/ }));
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(screen.queryByText("حدث خطأ، حاول مرة أخرى")).not.toBeInTheDocument();
+  });
+
+  it("shows a fixed window as break time without a break button", async () => {
+    const t = nowSec();
+    const api = makeApi(
+      { open_session: { id: "s1", started_at: t - 3600, break_sec: 300 }, open_break: null, worked_sec: 3300, server_time: t,
+        fixed_break: { starts_at: t - 300, ends_at: t + 3300, paid: false } },
+      { ...DEFAULT_SETTINGS, break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: false }
+    );
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    expect(await screen.findByText("وقت الاستراحة")).toBeInTheDocument();
+    expect(await screen.findByText(/13:00–14:00/)).toBeInTheDocument();
+    expect(screen.getByText(/غير مدفوعة/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /استراحة/ })).not.toBeInTheDocument();
+  });
+
+  it("still honours the legacy breaks_enabled flag", async () => {
+    const t = nowSec();
+    const legacy = { daily_target_hours: 8, timezone: "Asia/Riyadh", work_start: null, breaks_enabled: true, note_on_stop: "off" };
+    const api = makeApi({ open_session: { id: "s1", started_at: t - 60, break_sec: 0 }, open_break: null, worked_sec: 60, server_time: t }, legacy);
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    expect(await screen.findByRole("button", { name: /^استراحة$/ })).toBeInTheDocument();
   });
 });

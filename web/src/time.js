@@ -48,3 +48,28 @@ export function formatBreak(sec) {
   if (!Number.isFinite(s) || s <= 0) return "";
   return `${Math.max(1, Math.round(s / 60))} د`;
 }
+
+const overlap = (a1, a2, b1, b2) => Math.max(0, Math.min(a2, b2) - Math.max(a1, b1));
+
+/**
+ * Live session and day totals at client time `nowS` (server clock). The server's numbers
+ * are exact at `server_time`; only the seconds since then are added — nothing during an
+ * employee break, and nothing for the part of an unpaid fixed window after server_time.
+ */
+export function liveTotals(status, nowS) {
+  const open = status?.open_session;
+  const onBreak = Boolean(status?.open_break);
+  const fb = status?.fixed_break;
+  const inFixed = Boolean(open && fb && nowS >= fb.starts_at && nowS < fb.ends_at);
+  let since = 0;
+  if (open && !onBreak) {
+    since = Math.max(0, nowS - status.server_time);
+    if (fb && !fb.paid) since -= overlap(status.server_time, nowS, fb.starts_at, fb.ends_at);
+  }
+  return {
+    sessionSec: open ? status.server_time - open.started_at - (open.break_sec ?? 0) + since : 0,
+    todaySec: (status?.worked_sec ?? 0) + since,
+    onBreak,
+    inFixed,
+  };
+}

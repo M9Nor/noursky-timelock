@@ -30,4 +30,15 @@ describe("LiveFloor", () => {
     expect(await screen.findByText(/استراحة/)).toBeInTheDocument();
     expect(screen.getByText("داخل الدوام").closest(".lane").textContent).toContain("أحمد");
   });
+
+  it("marks working people during today's fixed window", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const api = { get: vi.fn(async () => ({
+      server_time: now,
+      fixed_break: { starts_at: now - 60, ends_at: now + 3540, paid: false },
+      employees: [{ user_id: "a", name: "أحمد", session_id: "s1", started_at: now - 3600, break_started_at: null }],
+    })) };
+    render(<LiveFloor api={api} />);
+    expect(await screen.findByText("وقت الاستراحة")).toBeInTheDocument();
+  });
 });
