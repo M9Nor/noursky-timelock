@@ -64,6 +64,30 @@ is caught by the employee, not discovered on payday.
 **5.4 Breaks (phase 2).** A break pauses counting; it does not end the session.
 `worked = session duration − Σ breaks`. Only one open break per open session.
 
+**5.4b Break modes (phase 2b, 2026-09-27).** Breaks become one manager setting,
+`break_mode`, with three values (approved by the owner):
+
+| Mode | Who acts | Deducted from worked time? | Fits |
+|---|---|---|---|
+| `off` | nobody | no | companies that don't track breaks |
+| `fixed` | nobody — automatic | manager picks: paid (no) / unpaid (yes) | offices with a set lunch hour |
+| `flexible` | the employee presses a button (§5.4) | yes | remote and field staff |
+
+- `fixed` needs `break_start` / `break_end` (`HH:MM`, location timezone, same day,
+  start < end) and `break_paid` (default false).
+- An **unpaid** fixed window is deducted from every session that overlaps it, whether or
+  not the employee actually rested — the standard auto-deduct model. A **paid** window
+  deducts nothing; it is shown to the employee for information only.
+- **History is frozen.** An unpaid fixed window is recorded as a `breaks` row
+  (`kind = 'fixed'`) once it has begun for an open session, or when a manager edit puts a
+  session over it. Worked-time reads then treat it like any other break, and a later
+  policy change never rewrites past days.
+- In `fixed` and `off` modes the employee break button is hidden and
+  `POST /session/break/start` returns `403 BREAKS_DISABLED`; ending an already-open
+  break is always allowed.
+- `settings.breaks_enabled` is kept in sync (`= break_mode = 'flexible'`) so older code
+  keeps working during a deploy; it is no longer the source of truth.
+
 **5.5 Note on stop (phase 2).** Short free text captured at stop, stored on the
 session, shown to the manager in the sessions list and CSV. This is the
 non-invasive proof-of-work mechanism for remote staff — chosen over screenshots or
