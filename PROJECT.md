@@ -190,6 +190,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | `break_start` | CHAR(5) NULL | `NULL` | بداية النافذة الثابتة، `HH:MM` بتوقيت الحساب — إلزامية مع `fixed`، ولازم تكون بنفس اليوم وقبل `break_end` |
 | `break_end` | CHAR(5) NULL | `NULL` | نهاية النافذة الثابتة، `HH:MM` بتوقيت الحساب — إلزامية مع `fixed` |
 | `break_paid` | TINYINT(1) | 0 | إذا 1، الاستراحة الثابتة ما بتنخصم من وقت العمل |
+| `break_policy_since` | BIGINT NULL | `NULL` | UNIX seconds لآخر مرة تغيّرت فيها سياسة الاستراحة (`break_mode` أو `break_start` أو `break_end` أو `break_paid`) — `PUT /admin/settings` بيحطها `now` بس لما وحدة من هدول تتغير، وإلا بتضل متل ما هي. أي نافذة ثابتة بلّشت **قبلها** ما بتنسجل أبداً (السياسة بتسري من لحظة الحفظ، مش على نوافذ سابقة). `NULL` = بدون قيد (حسابات ما غيّرت السياسة من بعد migration 003) |
 | `note_on_stop` | ENUM(`off`,`optional`,`required`) | `off` | سياسة الملاحظة عند إنهاء الدوام |
 | `max_session_hours` | DECIMAL(4,2) | 12 | حد الإغلاق التلقائي |
 | `updated_at` | BIGINT | | |
@@ -230,13 +231,13 @@ role === "admin"  أو  type === "agency"   →  manager
 | `open_flag` | **Generated column:** `1` إذا مفتوحة، `NULL` إذا مسكّرة |
 | `fixed_key` | **Generated column:** `started_at` إذا `kind = 'fixed'`، وإلا `NULL` |
 
-**الحماية من الاستراحات المكررة:** `UNIQUE (session_id, open_flag)` — نفس أسلوب `sessions`، استراحة مفتوحة وحدة بس لكل جلسة، محمي على مستوى الداتابيز. `UNIQUE (session_id, fixed_key)` — صف واحد بس لكل جلسة لكل نافذة ثابتة.
+**الحماية من الاستراحات المكررة:** `UNIQUE (session_id, open_flag)` — نفس أسلوب `sessions`، استراحة مفتوحة وحدة بس لكل جلسة، محمي على مستوى الداتابيز. `UNIQUE (session_id, fixed_key)` — صف واحد بس لكل جلسة لكل نافذة ثابتة. وفوقها: **صف `fixed` واحد بس لكل جلسة لكل يوم محلي** (أول نافذة انسجلت هي اللي بتضل) — مفروض بالـ SQL نفسه (`INSERT … SELECT … WHERE NOT EXISTS` على حدود اليوم المحلي)، فحتى لو المدير غيّر النافذة بنفس اليوم ما بينخصم اليوم مرتين.
 
 **حساب وقت العمل:** ما في عمود مخزّن لوقت العمل — بينحسب دائماً وقت القراءة كـ `duration_sec − break_sec`، ووقت كل استراحة **محصور (clipped) بحدود جلستها**: `LEAST(break.ended_at, session.ended_at) − GREATEST(break.started_at, session.started_at)`. هيك لو المدير قصّر جلسة بالتعديل اليدوي، أي استراحة فيها بتنقص معها تلقائياً بدل ما تصير أكبر من مدة الجلسة. استراحة شغالة (مفتوحة) بتنحسب لحظة القراءة بس (تقاس لـ `now`، مش أكتر).
 
 **استراحة مفتوحة على جلسة مسكّرة:** لو جلسة سكّرت (إغلاق تلقائي `autoCloseStale`، أو تعديل مدير غيّر `ended_at`) وفيها استراحة لسا مفتوحة، `autoCloseStale` بتسكّر تلقائياً أي استراحة زي هيك على لحظة إغلاق جلستها — فما بضل في استراحة معلّقة أبداً.
 
-**تعطيل الاستراحات:** لو المدير عطّل `breaks_enabled`، الموظف ما بيقدر يبلّش استراحة جديدة، **بس دائماً بيقدر ينهي استراحة شغالة عندو** — حتى ما يعلق فيها للأبد إذا المدير عطّلها وهو فيها.
+**تعطيل الاستراحات:** زر الاستراحة بيشتغل بس لما `break_mode = 'flexible'` (`breaks_enabled` صار مجرد نسخة متزامنة للتوافق). لو المدير غيّر `break_mode` لـ `off` أو `fixed`، الموظف ما بيقدر يبلّش استراحة جديدة، **بس دائماً بيقدر ينهي استراحة شغالة عندو** — حتى ما يعلق فيها للأبد إذا المدير عطّلها وهو فيها.
 
 ### `edits_log`
 
@@ -261,7 +262,8 @@ role === "admin"  أو  type === "agency"   →  manager
 
 | Method | Path | الوصف |
 |---|---|---|
-| GET | `/me/status?since=` | `{ open_session: {id, started_at, break_sec} \| null, open_break: {id, started_at} \| null, worked_sec, server_time }`. `worked_sec` بدون الاستراحات. `since` افتراضياً آخر 24 ساعة، و`fixed_break: {starts_at, ends_at, paid} \| null` (نافذة اليوم إذا `break_mode = fixed`) |
+| GET | `/me/status?since=` | `{ open_session: {id, started_at, break_sec} \| null, open_break: {id, started_at} \| null, worked_sec, fixed_break: {starts_at, ends_at, paid} \| null, server_time }`. `worked_sec` بدون الاستراحات. `since` افتراضياً آخر 24 ساعة. `fixed_break` = نافذة اليوم إذا `break_mode = fixed` (و`null` إذا نافذة اليوم بلّشت قبل `break_policy_since`)؛ وإذا الجلسة المفتوحة عندها صف `fixed` منسجل اليوم، بيرجع هاد الصف (`paid: false`) لأنه هو اللي عم ينخصم فعلياً |
+| GET | `/me/settings` | `{ daily_target_hours, timezone, work_start, note_on_stop, break_mode, break_start, break_end, break_paid, breaks_enabled }` — `breaks_enabled` قديم (legacy)، متزامن مع `break_mode = 'flexible'` |
 | POST | `/session/start` | `201 { id, started_at }` · `409 SESSION_ALREADY_OPEN` |
 | POST | `/session/stop` | Body اختياري: `{ note }` (حد أقصى 500 حرف). `200 { id, started_at, ended_at, duration_sec, break_sec, note }` — `duration_sec` المدة الكاملة، ووقت العمل = `duration_sec − break_sec`. إذا في استراحة مفتوحة بتسكّر معها. الملاحظة بتنحفظ بس إذا سياسة `note_on_stop` مش `off` · `400 NOTE_REQUIRED` · `400 NOTE_TOO_LONG` · `409 NO_OPEN_SESSION` |
 | POST | `/session/break/start` | `201 { id, session_id, started_at }` · `403 BREAKS_DISABLED` · `409 NO_OPEN_SESSION` · `409 BREAK_ALREADY_OPEN` — مسموح بس لما `break_mode = flexible` |
@@ -275,9 +277,9 @@ role === "admin"  أو  type === "agency"   →  manager
 | GET | `/admin/report?from=&to=` | لكل موظف: `worked_sec`, `sessions_count`, `days_present`, `auto_closed` + `daily_target_hours`, `timezone` |
 | GET | `/admin/sessions?from=&to=&user_id=` | قائمة الجلسات (حد أقصى 1000)، `user_id` اختياري، مع `break_sec` لكل جلسة، و`note` |
 | PATCH | `/admin/sessions/:id` | Body: `{ started_at, ended_at, reason }` — السبب إجباري |
-| GET | `/admin/export.csv?from=&to=` | CSV مع BOM: Employee, Email, Start, End, Hours (بدون الاستراحات), Break (min), Closed by, Note. الأوقات بالـ timezone تبع الحساب، وأي خلية بتبدأ بـ = + - @ بتنسبق بـ ' لحتى ما تشتغل كمعادلة |
+| GET | `/admin/export.csv?from=&to=` | CSV مع BOM: Employee, Email, Start, End, Hours (بدون الاستراحات، وما بتنزل تحت 0), Break (min), Closed by, Note. الأوقات بالـ timezone تبع الحساب، وأي خلية بتبدأ بـ = + - @ بتنسبق بـ ' لحتى ما تشتغل كمعادلة |
 | GET | `/admin/settings` | الإعدادات الحالية |
-| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص = القيمة الافتراضية |
+| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص = القيمة الافتراضية. قبل الحفظ بيسجّل النوافذ الثابتة اللي بلّشت تحت السياسة الحالية، وإذا تغيّر `break_mode`/`break_start`/`break_end`/`break_paid` بيصير `break_policy_since = now` |
 
 ### رموز الأخطاء
 
@@ -299,7 +301,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | `INVALID_DAYS` | 400 | عدد الأيام خارج المدى (1–31) | صحّح القيمة |
 | `SESSION_NOT_FOUND` | 404 | | |
 | `DEV_LOGIN_DISABLED` | 404 | dev-login مطلوب بالإنتاج | (تطوير فقط) |
-| `INVALID_BREAKS` | 400 | `breaks_enabled` مش boolean | إعداد الاستراحات غير صحيح |
+| `INVALID_BREAKS` | 400 | `breaks_enabled` أو `break_paid` مش boolean | إعداد الاستراحات غير صحيح |
 | `INVALID_NOTE_POLICY` | 400 | `note_on_stop` مش من القيم المسموحة | إعداد الملاحظة غير صحيح |
 | `BREAKS_DISABLED` | 403 | المدير ما فعّل الاستراحات | الاستراحات غير مفعّلة |
 | `INVALID_BREAK_MODE` | 400 | `break_mode` مش من القيم المسموحة | نوع الاستراحة غير صحيح |
@@ -321,8 +323,8 @@ role === "admin"  أو  type === "agency"   →  manager
    - **Lazy:** قبل أي قراءة أو start/stop للحساب المعني. هيك الأرقام بتضل صحيحة حتى لو Hostinger وقّف الـ process.
 4. **حساب الساعات بالتقارير** بيقص الجلسات اللي بتقطع حدود الفترة (مثلاً جلسة بلّشت آخر الليل وخلصت تاني يوم بتنحسب صح لكل يوم).
 5. **التعديل اليدوي:** للمدير فقط، سبب إجباري، النهاية لازم تكون بعد البداية ومش بالمستقبل، وكل تعديل بيتسجل بـ `edits_log`.
-6. **الاستراحات:** زر استراحة حقيقي (Pause)، لا Stop/Start. بيشتغل بس إذا المدير فعّل `breaks_enabled` بإعدادات الحساب، وبيسكّر وقت العمل مؤقتاً بدون ما يقفل الجلسة. وقت العمل المعروض والمحسوب بالتقارير = مدة الجلسة ناقص مجموع الاستراحات، وبيتحسب وقت القراءة (مش مخزّن). كل استراحة محصورة (clipped) بحدود جلستها — إذا المدير قصّر جلسة بالتعديل اليدوي، الاستراحة اللي فيها بتنقص معها تلقائياً. إذا جلسة سكّرت وفيها استراحة مفتوحة (إغلاق تلقائي أو تعديل مدير)، `autoCloseStale` بتسكّر الاستراحة بنفس لحظة إغلاق الجلسة. استراحة مفتوحة وحدة بس لكل جلسة — محمي على مستوى الداتابيز متل الجلسات (شوف §7). الموظف يقدر ينهي استراحته دائماً حتى لو المدير عطّل الاستراحات وهو فيها، حتى ما يعلق فيها للأبد.
-7. الاستراحة الثابتة غير المدفوعة بتنخصم من أي جلسة بتغطي النافذة، حتى لو الموظف اشتغل وقتها؛ بتنسجل كصف `breaks` نوعه `fixed` أول ما تبلش النافذة لجلسة مفتوحة أو لما المدير يعدّل جلسة لتغطيها، فتغيير الإعدادات بعدين ما بيغيّر الأيام المسجلة؛ المدفوعة ما بتنخصم وبتنعرض للموظف بس.
+6. **الاستراحات:** زر استراحة حقيقي (Pause)، لا Stop/Start. بيشتغل بس إذا المدير اختار `break_mode = 'flexible'` بإعدادات الحساب (غير هيك `403 BREAKS_DISABLED`)، وبيسكّر وقت العمل مؤقتاً بدون ما يقفل الجلسة. وقت العمل المعروض والمحسوب بالتقارير = مدة الجلسة ناقص مجموع الاستراحات، وبيتحسب وقت القراءة (مش مخزّن). كل استراحة محصورة (clipped) بحدود جلستها — إذا المدير قصّر جلسة بالتعديل اليدوي، الاستراحة اللي فيها بتنقص معها تلقائياً. إذا جلسة سكّرت وفيها استراحة مفتوحة (إغلاق تلقائي أو تعديل مدير)، `autoCloseStale` بتسكّر الاستراحة بنفس لحظة إغلاق الجلسة. استراحة مفتوحة وحدة بس لكل جلسة — محمي على مستوى الداتابيز متل الجلسات (شوف §7). الموظف يقدر ينهي استراحته دائماً حتى لو المدير عطّل الاستراحات وهو فيها، حتى ما يعلق فيها للأبد.
+7. الاستراحة الثابتة غير المدفوعة بتنخصم من أي جلسة بتغطي النافذة، حتى لو الموظف اشتغل وقتها؛ بتنسجل كصف `breaks` نوعه `fixed` أول ما تبلش النافذة لجلسة مفتوحة أو لما المدير يعدّل جلسة لتغطيها، فتغيير الإعدادات بعدين ما بيغيّر الأيام المسجلة؛ المدفوعة ما بتنخصم وبتنعرض للموظف بس. **صف ثابت واحد بس لكل جلسة لكل يوم محلي** — أول نافذة انسجلت هي اللي بتضل، فتغيير النافذة بنفس اليوم ما بيخصم مرتين. **تغيير السياسة بيسري من لحظة الحفظ** (`break_policy_since`) وأبداً مش على نوافذ أقدم: نافذة بلّشت قبل الحفظ ما بتنخصم، وتعديل مدير لجلسة بيوم قبل السياسة ما بيسجّل شي. قبل ما تتغير السياسة، `PUT /admin/settings` بيسجّل أول النوافذ اللي بلّشت تحت السياسة القديمة، وتعديل جلسة مفتوحة بيسجّل نافذتها الشغالة قبل التعديل. الاستراحات الثابتة المسجلة **ما بتنشال من الواجهة**.
 
 ---
 

@@ -6,8 +6,21 @@ The files here upgrade an **existing** database that was created from an older
 phpMyAdmin → SQL, then record it below.
 
 Rules (from `CLAUDE.md`): every statement must run on both MySQL 8 and MariaDB 10.2+,
-so no `ADD COLUMN IF NOT EXISTS` (MariaDB-only). A file that fails with
-"Duplicate column" was already applied — record it and move on.
+so no `ADD COLUMN IF NOT EXISTS` (MariaDB-only). A file that fails on its FIRST
+statement with "Duplicate column" was already applied — record it and move on; a
+failure on a later statement means it stopped midway (see 003 below).
+
+**003 is several statements and is NOT re-runnable as a whole.** phpMyAdmin runs them
+one by one and stops at the first error, so a failure midway leaves the earlier ones
+applied. Before retrying, check what is already there:
+
+```sql
+SHOW COLUMNS FROM settings LIKE 'break_%';
+SHOW COLUMNS FROM breaks;
+```
+
+and run only the statements whose column/key is still missing. The `UPDATE settings SET
+break_mode = 'flexible' …` line is safe to run again once `break_mode` exists.
 
 **Deploy order:** apply the migration **before** pushing the code that reads the new
 column. The API's `/health` stays green on an old schema, so a missing column only
