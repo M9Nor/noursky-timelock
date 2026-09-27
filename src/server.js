@@ -400,9 +400,18 @@ app.post("/session/break/stop", authed, async (c) => {
   }
 });
 
+const NOTE_MAX = 500;
+
 app.post("/session/stop", authed, async (c) => {
   const { uid, loc } = c.get("claims");
   await autoCloseStale(loc);
+  const body = await c.req.json().catch(() => ({}));
+  const rawNote = typeof body.note === "string" ? body.note.trim() : "";
+  if (rawNote.length > NOTE_MAX) throw new HttpError(400, "NOTE_TOO_LONG");
+  const policy = (await getSettings(loc))?.note_on_stop ?? "off";
+  // With the policy off the note field is not collected, so nothing is stored.
+  const note = policy === "off" || !rawNote ? null : rawNote;
+
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -411,11 +420,12 @@ app.post("/session/stop", authed, async (c) => {
       { uid, loc }
     );
     if (!rows.length) throw new HttpError(409, "NO_OPEN_SESSION");
+    if (policy === "required" && !note) throw new HttpError(400, "NOTE_REQUIRED");
     const s = rows[0];
     const t = now();
     await conn.execute(
-      "UPDATE sessions SET ended_at = :t, duration_sec = :dur, closed_by = 'user' WHERE id = :id",
-      { t, dur: t - s.started_at, id: s.id }
+      "UPDATE sessions SET ended_at = :t, duration_sec = :dur, closed_by = 'user', note = :note WHERE id = :id",
+      { t, dur: t - s.started_at, note, id: s.id }
     );
     // Stopping during a break ends the break at the same instant.
     await conn.execute(
@@ -429,7 +439,7 @@ app.post("/session/stop", authed, async (c) => {
     await conn.commit();
     return c.json({
       id: s.id, started_at: s.started_at, ended_at: t,
-      duration_sec: t - s.started_at, break_sec: Number(brk.break_sec),
+      duration_sec: t - s.started_at, break_sec: Number(brk.break_sec), note,
     });
   } catch (e) {
     await conn.rollback().catch(() => {});
@@ -561,7 +571,7 @@ app.get("/admin/sessions", authed, managerOnly, async (c) => {
   const uid = c.req.query("user_id") ?? null;
   await autoCloseStale(loc);
   const sessions = (await q(
-    `SELECT s.id, s.user_id, e.name, s.started_at, s.ended_at, s.duration_sec, s.closed_by,
+    `SELECT s.id, s.user_id, e.name, s.started_at, s.ended_at, s.duration_sec, s.closed_by, s.note,
             ${BREAK_SEC_EXPR} AS break_sec
        FROM sessions s
        JOIN employees e ON e.user_id = s.user_id AND e.location_id = s.location_id
@@ -660,22 +670,30 @@ app.get("/admin/export.csv", authed, managerOnly, async (c) => {
   await autoCloseStale(loc);
   const tz = (await getSettings(loc))?.timezone ?? "Asia/Riyadh";
   const rows = await q(
-    `SELECT e.name, e.email, s.started_at, s.ended_at, s.duration_sec, s.closed_by
+    `SELECT e.name, e.email, s.started_at, s.ended_at, s.duration_sec, s.closed_by, s.note,
+            ${BREAK_SEC_EXPR} AS break_sec
        FROM sessions s
        JOIN employees e ON e.user_id = s.user_id AND e.location_id = s.location_id
       WHERE s.location_id = :loc AND s.started_at >= :from AND s.started_at < :to
       ORDER BY e.name, s.started_at`,
-    { loc, from, to }
+    { loc, from, to, now: now() }
   );
 
   const fmt = (ts) => ts
     ? new Intl.DateTimeFormat("en-GB", { timeZone: tz, dateStyle: "short", timeStyle: "short" }).format(new Date(Number(ts) * 1000))
     : "";
-  const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  // Notes are free text typed by employees: a cell starting with = + - @ would run as
+  // a formula when the manager opens the file in Excel, so it is prefixed with '.
+  const esc = (v) => {
+    const s = String(v ?? "");
+    const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+    return `"${safe.replace(/"/g, '""')}"`;
+  };
   const lines = [
-    ["Employee", "Email", "Start", "End", "Hours", "Closed by"],
+    ["Employee", "Email", "Start", "End", "Hours", "Break (min)", "Closed by", "Note"],
     ...rows.map((r) => [r.name, r.email, fmt(r.started_at), fmt(r.ended_at),
-      r.duration_sec ? (Number(r.duration_sec) / 3600).toFixed(2) : "", r.closed_by ?? "open"]),
+      r.duration_sec ? ((Number(r.duration_sec) - Number(r.break_sec)) / 3600).toFixed(2) : "",
+      Math.round(Number(r.break_sec) / 60), r.closed_by ?? "open", r.note ?? ""]),
   ];
   const csv = "\uFEFF" + lines.map((l) => l.map(esc).join(",")).join("\r\n"); // BOM → Excel reads Arabic
   return c.body(csv, 200, {

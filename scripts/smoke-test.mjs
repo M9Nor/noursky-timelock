@@ -372,6 +372,34 @@ check("report worked time excludes breaks",
   p2Worked === p2Stop.body?.duration_sec - p2Stop.body?.break_sec,
   `(worked ${p2Worked}, duration ${p2Stop.body?.duration_sec}, break ${p2Stop.body?.break_sec})`);
 
+// Note on stop. A required note is enforced by the server, not just the UI.
+await p2Policy(true, "required");
+const p3Open = await call(PE, "POST", "/session/start");
+check("stop without a required note → 400",
+  (await call(PE, "POST", "/session/stop")).body?.error === "NOTE_REQUIRED");
+check("the session stays open after a rejected stop",
+  (await call(PE, "GET", "/me/status")).body?.open_session?.id === p3Open.body?.id);
+check("note over 500 characters → 400",
+  (await call(PE, "POST", "/session/stop", { note: "x".repeat(501) })).body?.error === "NOTE_TOO_LONG");
+const noted = await call(PE, "POST", "/session/stop", { note: "  =أنهيت عرض السعر  " });
+check("stop with a note → 200 and the note is trimmed",
+  noted.status === 200 && noted.body?.note === "=أنهيت عرض السعر", `(${JSON.stringify(noted.body)})`);
+const p3Rows = await call(PM, "GET", `/admin/sessions?from=${p3Open.body?.started_at}&to=${noted.body?.ended_at + 10}&user_id=${P2LOC}-u1`);
+check("session detail carries the note",
+  p3Rows.body?.sessions?.find((x) => x.id === p3Open.body?.id)?.note === "=أنهيت عرض السعر");
+const p3Csv = await call(PM, "GET", `/admin/export.csv?from=${p3Open.body?.started_at}&to=${noted.body?.ended_at + 10}`);
+check("CSV has break and note columns, and neutralises a formula-looking note",
+  typeof p3Csv.body === "string" && p3Csv.body.includes('"Break (min)"') && p3Csv.body.includes('"Note"')
+    && p3Csv.body.includes(`"'=أنهيت عرض السعر"`),
+  `(${String(p3Csv.body).slice(0, 300)})`);
+
+// With the policy off the note is not collected, so nothing is stored.
+await p2Policy(true, "off");
+await call(PE, "POST", "/session/start");
+const unnoted = await call(PE, "POST", "/session/stop", { note: "لن تُحفظ" });
+check("note is ignored when the policy is off", unnoted.status === 200 && unnoted.body?.note === null,
+  `(${JSON.stringify(unnoted.body)})`);
+
 await cleanupLocation(P2LOC);
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);

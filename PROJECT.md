@@ -233,7 +233,7 @@ role === "admin"  أو  type === "agency"   →  manager
 |---|---|---|
 | GET | `/me/status?since=` | `{ open_session: {id, started_at, break_sec} \| null, open_break: {id, started_at} \| null, worked_sec, server_time }`. `worked_sec` بدون الاستراحات. `since` افتراضياً آخر 24 ساعة. |
 | POST | `/session/start` | `201 { id, started_at }` · `409 SESSION_ALREADY_OPEN` |
-| POST | `/session/stop` | `200 { id, started_at, ended_at, duration_sec, break_sec }` — `duration_sec` المدة الكاملة، ووقت العمل = `duration_sec − break_sec`. إذا في استراحة مفتوحة بتسكّر معها · `409 NO_OPEN_SESSION` |
+| POST | `/session/stop` | Body اختياري: `{ note }` (حد أقصى 500 حرف). `200 { id, started_at, ended_at, duration_sec, break_sec, note }` — `duration_sec` المدة الكاملة، ووقت العمل = `duration_sec − break_sec`. إذا في استراحة مفتوحة بتسكّر معها. الملاحظة بتنحفظ بس إذا سياسة `note_on_stop` مش `off` · `400 NOTE_REQUIRED` · `400 NOTE_TOO_LONG` · `409 NO_OPEN_SESSION` |
 | POST | `/session/break/start` | `201 { id, session_id, started_at }` · `403 BREAKS_DISABLED` · `409 NO_OPEN_SESSION` · `409 BREAK_ALREADY_OPEN` |
 | POST | `/session/break/stop` | `200 { id, started_at, ended_at, duration_sec }` · `409 NO_OPEN_BREAK` — مسموح حتى لو المدير لغى الاستراحات |
 
@@ -243,9 +243,9 @@ role === "admin"  أو  type === "agency"   →  manager
 |---|---|---|
 | GET | `/admin/live` | كل الموظفين مع الجلسة المفتوحة لكل واحد (المفتوحين أول شي)، ومع كل موظف `break_started_at` إذا هو باستراحة |
 | GET | `/admin/report?from=&to=` | لكل موظف: `worked_sec`, `sessions_count`, `days_present`, `auto_closed` + `daily_target_hours`, `timezone` |
-| GET | `/admin/sessions?from=&to=&user_id=` | قائمة الجلسات (حد أقصى 1000)، `user_id` اختياري، مع `break_sec` لكل جلسة |
+| GET | `/admin/sessions?from=&to=&user_id=` | قائمة الجلسات (حد أقصى 1000)، `user_id` اختياري، مع `break_sec` لكل جلسة، و`note` |
 | PATCH | `/admin/sessions/:id` | Body: `{ started_at, ended_at, reason }` — السبب إجباري |
-| GET | `/admin/export.csv?from=&to=` | CSV مع BOM (لحتى الـ Excel يقرأ العربي صح)، الأوقات بالـ timezone تبع الحساب |
+| GET | `/admin/export.csv?from=&to=` | CSV مع BOM: Employee, Email, Start, End, Hours (بدون الاستراحات), Break (min), Closed by, Note. الأوقات بالـ timezone تبع الحساب، وأي خلية بتبدأ بـ = + - @ بتنسبق بـ ' لحتى ما تشتغل كمعادلة |
 | GET | `/admin/settings` | الإعدادات الحالية |
 | PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, late_grace_minutes, breaks_enabled, note_on_stop }` — `breaks_enabled` boolean (افتراضي `false`)، `note_on_stop` واحد من `off`/`optional`/`required` (افتراضي `off`). الحقل الناقص = القيمة الافتراضية |
 
@@ -274,6 +274,8 @@ role === "admin"  أو  type === "agency"   →  manager
 | `BREAKS_DISABLED` | 403 | المدير ما فعّل الاستراحات | الاستراحات غير مفعّلة |
 | `BREAK_ALREADY_OPEN` | 409 | | أنت في استراحة بالفعل |
 | `NO_OPEN_BREAK` | 409 | | لا توجد استراحة مفتوحة |
+| `NOTE_REQUIRED` | 400 | المدير خلّى الملاحظة إلزامية | اكتب ملاحظة قبل إنهاء الدوام |
+| `NOTE_TOO_LONG` | 400 | أكتر من 500 حرف | الملاحظة طويلة جداً |
 | `INTERNAL_ERROR` | 500 | | حدث خطأ، حاول مرة أخرى |
 
 ---
