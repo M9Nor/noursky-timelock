@@ -37,4 +37,25 @@ describe("SettingsPanel", () => {
     await waitFor(() => expect(api.put).toHaveBeenCalled());
     expect(api.put.mock.calls[0][1].late_grace_minutes).toBe(15);
   });
+
+  it("shows the saved break and note policies", async () => {
+    const api = {
+      get: vi.fn(async () => ({ timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15, breaks_enabled: true, note_on_stop: "required" })),
+      put: vi.fn(),
+    };
+    wrap(<SettingsPanel api={api} />);
+    expect(await screen.findByLabelText("تفعيل الاستراحات")).toBeChecked();
+    expect(screen.getByLabelText("ملاحظة عند إنهاء الدوام")).toHaveValue("required");
+  });
+
+  it("saves the break and note policies", async () => {
+    const saved = { timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15, breaks_enabled: false, note_on_stop: "off" };
+    const api = { get: vi.fn(async () => saved), put: vi.fn(async (_p, body) => ({ ...saved, ...body })) };
+    wrap(<SettingsPanel api={api} />);
+    fireEvent.click(await screen.findByLabelText("تفعيل الاستراحات"));
+    fireEvent.change(screen.getByLabelText("ملاحظة عند إنهاء الدوام"), { target: { value: "optional" } });
+    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(api.put.mock.calls[0][1]).toEqual(expect.objectContaining({ breaks_enabled: true, note_on_stop: "optional" }));
+  });
 });

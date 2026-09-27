@@ -25,6 +25,8 @@ export default function SettingsPanel({ api }) {
         late_grace_minutes: s.late_grace_minutes === "" || s.late_grace_minutes == null
           ? 15
           : Number(s.late_grace_minutes),
+        breaks_enabled: Boolean(s.breaks_enabled),
+        note_on_stop: s.note_on_stop ?? "off",
       });
       setS(saved); toast("تم الحفظ");
     } catch (e) {
@@ -32,6 +34,8 @@ export default function SettingsPanel({ api }) {
         : e.code === "INVALID_HOURS" ? "الساعات غير صحيحة"
         : e.code === "INVALID_WORK_START" ? "وقت البداية غير صحيح"
         : e.code === "INVALID_GRACE" ? "سماح التأخير غير صحيح"
+        : e.code === "INVALID_BREAKS" ? "إعداد الاستراحات غير صحيح"
+        : e.code === "INVALID_NOTE_POLICY" ? "إعداد الملاحظة غير صحيح"
         : "حدث خطأ، حاول مرة أخرى");
     }
   }
@@ -44,6 +48,17 @@ export default function SettingsPanel({ api }) {
       <div className="field"><label>حد الجلسة (ساعات)</label><input type="number" step="0.5" value={s.max_session_hours} onChange={set("max_session_hours")} /></div>
       <div className="field"><label htmlFor="work-start">بداية الدوام (HH:MM)</label><input id="work-start" value={s.work_start ?? ""} onChange={set("work_start")} /></div>
       <div className="field"><label htmlFor="grace">سماح التأخير (دقائق)</label><input id="grace" type="number" step="1" min="0" max="240" value={s.late_grace_minutes ?? 15} onChange={set("late_grace_minutes")} /></div>
+      <div className="field check">
+        <label><input type="checkbox" checked={Boolean(s.breaks_enabled)} onChange={(e) => setS({ ...s, breaks_enabled: e.target.checked })} />تفعيل الاستراحات</label>
+      </div>
+      <div className="field">
+        <label htmlFor="note-policy">ملاحظة عند إنهاء الدوام</label>
+        <select id="note-policy" value={s.note_on_stop ?? "off"} onChange={set("note_on_stop")}>
+          <option value="off">بدون</option>
+          <option value="optional">اختيارية</option>
+          <option value="required">إلزامية</option>
+        </select>
+      </div>
       {error && <div className="field"><span className="err">{error}</span></div>}
       <div className="dlg-a"><Button onClick={save}>حفظ</Button></div>
     </section>
