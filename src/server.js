@@ -9,7 +9,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { cors } from "hono/cors";
 import mysql from "mysql2/promise";
 import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID } from "node:crypto";
-import { localZone } from "./tz.js";
+import { localZone, localDate, wallToUtc, fixedWindows } from "./tz.js";
 
 /* ------------------------------------------------------------------ */
 /* Config                                                              */
@@ -151,12 +151,60 @@ const NOTE_POLICIES = ["off", "optional", "required"];
 const BREAK_MODES = ["off", "fixed", "flexible"];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+/** Today's fixed break window (local date of `t`), or null when the mode isn't fixed. */
+function todayFixedBreak(st, t) {
+  if (st?.break_mode !== "fixed" || !st.break_start || !st.break_end) return null;
+  const day = localDate(st.timezone, t);
+  return {
+    starts_at: wallToUtc(st.timezone, day, st.break_start),
+    ends_at: wallToUtc(st.timezone, day, st.break_end),
+    paid: Boolean(st.break_paid),
+  };
+}
+
+/**
+ * Unpaid fixed windows are written as `breaks` rows (kind 'fixed') once the window has
+ * begun for a session, so every worked-time query deducts them like any other break and
+ * a later policy change never rewrites a recorded day. Rows hold the whole window; reads
+ * clip it to the session. INSERT IGNORE on ux_fixed_window makes this idempotent.
+ */
+async function recordFixedBreaks(session, st, t) {
+  if (st?.break_mode !== "fixed" || st.break_paid || !st.break_start || !st.break_end) return;
+  const start = Number(session.started_at);
+  const until = session.ended_at == null ? t : Math.min(Number(session.ended_at), t);
+  for (const [ws, we] of fixedWindows(st.timezone, start, until, st.break_start, st.break_end)) {
+    if (ws > t || we <= start || ws >= until) continue;
+    await q(
+      `INSERT IGNORE INTO breaks (id, session_id, location_id, kind, started_at, ended_at)
+       VALUES (:id, :sid, :loc, 'fixed', :ws, :we)`,
+      { id: randomUUID(), sid: session.id, loc: session.location_id, ws, we }
+    );
+  }
+}
+
+/** Record started fixed windows for every open session (optionally one location). */
+async function recordOpenFixedBreaks(loc = null) {
+  const t = now();
+  const open = await q(
+    `SELECT s.id, s.location_id, s.started_at, s.ended_at,
+            st.timezone, st.break_mode, st.break_start, st.break_end, st.break_paid
+       FROM sessions s
+       JOIN settings st ON st.location_id = s.location_id
+      WHERE s.ended_at IS NULL AND st.break_mode = 'fixed' AND st.break_paid = 0
+        AND (:loc IS NULL OR s.location_id = :loc)`,
+    { loc }
+  );
+  for (const s of open) await recordFixedBreaks(s, s, t);
+}
+
 /**
  * Caps forgotten sessions at max_session_hours and flags them 'auto'.
  * Runs on a timer AND lazily before reads, so correctness never depends
  * on the process staying alive between requests.
  */
 async function autoCloseStale(loc = null) {
+  // Before any session is capped, so windows inside it are recorded first.
+  await recordOpenFixedBreaks(loc);
   await q(
     `UPDATE sessions s
        JOIN settings st ON st.location_id = s.location_id
@@ -283,6 +331,7 @@ app.get("/me/status", authed, async (c) => {
       : null,
     open_break: brk[0] ? { id: brk[0].id, started_at: Number(brk[0].started_at) } : null,
     worked_sec: Number(total[0].worked_sec),
+    fixed_break: todayFixedBreak(await getSettings(loc), t),
     server_time: t,
   });
 });
@@ -443,9 +492,11 @@ app.post("/session/stop", authed, async (c) => {
       "UPDATE breaks SET ended_at = :t WHERE session_id = :id AND ended_at IS NULL",
       { t, id: s.id }
     );
+    // Clipped to the session: a fixed window can run past the stop.
     const [[brk]] = await conn.execute(
-      "SELECT COALESCE(SUM(ended_at - started_at), 0) AS break_sec FROM breaks WHERE session_id = :id",
-      { id: s.id }
+      `SELECT COALESCE(SUM(GREATEST(0, LEAST(ended_at, :t) - GREATEST(started_at, :st))), 0) AS break_sec
+         FROM breaks WHERE session_id = :id`,
+      { id: s.id, t, st: s.started_at }
     );
     await conn.commit();
     return c.json({
@@ -474,7 +525,8 @@ app.get("/admin/live", authed, managerOnly, async (c) => {
       ORDER BY s.started_at IS NULL, e.name`,
     { loc }
   );
-  return c.json({ server_time: now(), employees });
+  const t = now();
+  return c.json({ server_time: t, fixed_break: todayFixedBreak(await getSettings(loc), t), employees });
 });
 
 // Every local day overlapping [from, to) starts at most ~14h before `from` and ends at
@@ -665,6 +717,8 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
       { lid: randomUUID(), id, loc, editor, os: old.started_at, oe: old.ended_at, s, e, reason: reason.slice(0, 500), t: now() }
     );
     await conn.commit();
+    // The edited bounds may now cover a fixed window; record it under the current policy.
+    await recordFixedBreaks({ id, location_id: loc, started_at: s, ended_at: e }, await getSettings(loc), now());
     return c.json({ id, started_at: s, ended_at: e, duration_sec: e - s, closed_by: "admin" });
   } catch (err) {
     await conn.rollback().catch(() => {});

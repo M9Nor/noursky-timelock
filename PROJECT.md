@@ -261,7 +261,7 @@ role === "admin"  أو  type === "agency"   →  manager
 
 | Method | Path | الوصف |
 |---|---|---|
-| GET | `/me/status?since=` | `{ open_session: {id, started_at, break_sec} \| null, open_break: {id, started_at} \| null, worked_sec, server_time }`. `worked_sec` بدون الاستراحات. `since` افتراضياً آخر 24 ساعة. |
+| GET | `/me/status?since=` | `{ open_session: {id, started_at, break_sec} \| null, open_break: {id, started_at} \| null, worked_sec, server_time }`. `worked_sec` بدون الاستراحات. `since` افتراضياً آخر 24 ساعة، و`fixed_break: {starts_at, ends_at, paid} \| null` (نافذة اليوم إذا `break_mode = fixed`) |
 | POST | `/session/start` | `201 { id, started_at }` · `409 SESSION_ALREADY_OPEN` |
 | POST | `/session/stop` | Body اختياري: `{ note }` (حد أقصى 500 حرف). `200 { id, started_at, ended_at, duration_sec, break_sec, note }` — `duration_sec` المدة الكاملة، ووقت العمل = `duration_sec − break_sec`. إذا في استراحة مفتوحة بتسكّر معها. الملاحظة بتنحفظ بس إذا سياسة `note_on_stop` مش `off` · `400 NOTE_REQUIRED` · `400 NOTE_TOO_LONG` · `409 NO_OPEN_SESSION` |
 | POST | `/session/break/start` | `201 { id, session_id, started_at }` · `403 BREAKS_DISABLED` · `409 NO_OPEN_SESSION` · `409 BREAK_ALREADY_OPEN` — مسموح بس لما `break_mode = flexible` |
@@ -271,7 +271,7 @@ role === "admin"  أو  type === "agency"   →  manager
 
 | Method | Path | الوصف |
 |---|---|---|
-| GET | `/admin/live` | كل الموظفين مع الجلسة المفتوحة لكل واحد (المفتوحين أول شي)، ومع كل موظف `break_started_at` إذا هو باستراحة |
+| GET | `/admin/live` | كل الموظفين مع الجلسة المفتوحة لكل واحد (المفتوحين أول شي)، ومع كل موظف `break_started_at` إذا هو باستراحة، و`fixed_break: {starts_at, ends_at, paid} \| null` (نافذة اليوم إذا `break_mode = fixed`) |
 | GET | `/admin/report?from=&to=` | لكل موظف: `worked_sec`, `sessions_count`, `days_present`, `auto_closed` + `daily_target_hours`, `timezone` |
 | GET | `/admin/sessions?from=&to=&user_id=` | قائمة الجلسات (حد أقصى 1000)، `user_id` اختياري، مع `break_sec` لكل جلسة، و`note` |
 | PATCH | `/admin/sessions/:id` | Body: `{ started_at, ended_at, reason }` — السبب إجباري |
@@ -322,6 +322,7 @@ role === "admin"  أو  type === "agency"   →  manager
 4. **حساب الساعات بالتقارير** بيقص الجلسات اللي بتقطع حدود الفترة (مثلاً جلسة بلّشت آخر الليل وخلصت تاني يوم بتنحسب صح لكل يوم).
 5. **التعديل اليدوي:** للمدير فقط، سبب إجباري، النهاية لازم تكون بعد البداية ومش بالمستقبل، وكل تعديل بيتسجل بـ `edits_log`.
 6. **الاستراحات:** زر استراحة حقيقي (Pause)، لا Stop/Start. بيشتغل بس إذا المدير فعّل `breaks_enabled` بإعدادات الحساب، وبيسكّر وقت العمل مؤقتاً بدون ما يقفل الجلسة. وقت العمل المعروض والمحسوب بالتقارير = مدة الجلسة ناقص مجموع الاستراحات، وبيتحسب وقت القراءة (مش مخزّن). كل استراحة محصورة (clipped) بحدود جلستها — إذا المدير قصّر جلسة بالتعديل اليدوي، الاستراحة اللي فيها بتنقص معها تلقائياً. إذا جلسة سكّرت وفيها استراحة مفتوحة (إغلاق تلقائي أو تعديل مدير)، `autoCloseStale` بتسكّر الاستراحة بنفس لحظة إغلاق الجلسة. استراحة مفتوحة وحدة بس لكل جلسة — محمي على مستوى الداتابيز متل الجلسات (شوف §7). الموظف يقدر ينهي استراحته دائماً حتى لو المدير عطّل الاستراحات وهو فيها، حتى ما يعلق فيها للأبد.
+7. الاستراحة الثابتة غير المدفوعة بتنخصم من أي جلسة بتغطي النافذة، حتى لو الموظف اشتغل وقتها؛ بتنسجل كصف `breaks` نوعه `fixed` أول ما تبلش النافذة لجلسة مفتوحة أو لما المدير يعدّل جلسة لتغطيها، فتغيير الإعدادات بعدين ما بيغيّر الأيام المسجلة؛ المدفوعة ما بتنخصم وبتنعرض للموظف بس.
 
 ---
 

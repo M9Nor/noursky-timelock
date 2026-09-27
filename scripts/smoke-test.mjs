@@ -441,6 +441,66 @@ check("the break button is refused in fixed mode",
   (await call(FE, "POST", "/session/break/start")).body?.error === "BREAKS_DISABLED");
 await call(FE, "POST", "/session/stop");
 
+// Unpaid fixed window: recorded as a break when a manager edit puts a session over it.
+// Riyadh is UTC+3 with no DST; fxMidnight is 00:00 local "yesterday" as UTC seconds.
+const fxMidnight = Math.floor((t + 3 * 3600) / 86400) * 86400 - 86400 - 3 * 3600;
+async function fxSessionAt(dayStart) {
+  const open = await call(FE, "POST", "/session/start");
+  await call(FE, "POST", "/session/stop");
+  await call(FM, "PATCH", `/admin/sessions/${open.body?.id}`,
+    { started_at: dayStart + 9 * 3600, ended_at: dayStart + 17 * 3600, reason: "نافذة استراحة للاختبار" });
+  return open.body?.id;
+}
+await fxPolicy({ break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: false });
+const fxUnpaidId = await fxSessionAt(fxMidnight);
+const fxRange = `from=${fxMidnight + 9 * 3600}&to=${fxMidnight + 17 * 3600}`;
+const fxRows = await call(FM, "GET", `/admin/sessions?${fxRange}&user_id=${FXLOC}-u1`);
+check("an unpaid fixed window is deducted from a session that covers it",
+  fxRows.body?.sessions?.find((x) => x.id === fxUnpaidId)?.break_sec === 3600,
+  `(${JSON.stringify(fxRows.body?.sessions?.map((x) => x.break_sec))})`);
+const fxReport = await call(FM, "GET", `/admin/report?${fxRange}`);
+check("report worked time excludes the unpaid window",
+  fxReport.body?.employees?.find((e) => e.user_id === `${FXLOC}-u1`)?.worked_sec === 7 * 3600,
+  `(${JSON.stringify(fxReport.body?.employees?.find((e) => e.user_id === `${FXLOC}-u1`))})`);
+await fxPolicy({ break_mode: "off" });
+const fxAfterOff = await call(FM, "GET", `/admin/sessions?${fxRange}&user_id=${FXLOC}-u1`);
+check("switching the policy off does not rewrite a recorded day",
+  fxAfterOff.body?.sessions?.find((x) => x.id === fxUnpaidId)?.break_sec === 3600);
+
+// A paid window deducts nothing.
+await fxPolicy({ break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: true });
+const fxPaidId = await fxSessionAt(fxMidnight - 86400);
+const fxPaidRows = await call(FM, "GET",
+  `/admin/sessions?from=${fxMidnight - 86400 + 9 * 3600}&to=${fxMidnight - 86400 + 17 * 3600}&user_id=${FXLOC}-u1`);
+check("a paid fixed window deducts nothing",
+  fxPaidRows.body?.sessions?.find((x) => x.id === fxPaidId)?.break_sec === 0);
+
+// Live: a window that is running now. Needs a same-day window around the current local
+// time, so it is skipped in the last hour before local midnight.
+const fxNowLocal = (t + 3 * 3600) % 86400;
+if (fxNowLocal >= 120 && fxNowLocal < 23 * 3600) {
+  const hhmm = (sec) => `${String(Math.floor(sec / 3600)).padStart(2, "0")}:${String(Math.floor(sec % 3600 / 60)).padStart(2, "0")}`;
+  const winStart = Math.floor(fxNowLocal / 60) * 60 - 60;
+  await fxPolicy({ break_mode: "fixed", break_start: hhmm(winStart), break_end: hhmm(winStart + 3600), break_paid: false });
+  const liveOpen = await call(FE, "POST", "/session/start");
+  await sleep(2100);
+  const liveStatus = await call(FE, "GET", "/me/status");
+  const fb = liveStatus.body?.fixed_break;
+  check("status reports today's fixed window",
+    fb?.paid === false && fb.starts_at <= liveStatus.body.server_time && liveStatus.body.server_time < fb.ends_at,
+    `(${JSON.stringify(fb)})`);
+  check("a running unpaid window counts as break time on the open session",
+    liveStatus.body?.open_session?.break_sec >= 2, `(${JSON.stringify(liveStatus.body?.open_session)})`);
+  const fxLive = await call(FM, "GET", "/admin/live");
+  check("live floor carries today's fixed window", fxLive.body?.fixed_break?.starts_at === fb?.starts_at);
+  const liveStop = await call(FE, "POST", "/session/stop");
+  check("stop clips a window that runs past it",
+    liveStop.status === 200 && liveStop.body?.break_sec === liveStop.body?.duration_sec,
+    `(break ${liveStop.body?.break_sec}, duration ${liveStop.body?.duration_sec}, session ${liveOpen.body?.id})`);
+} else {
+  console.log("  SKIP  live fixed-window checks (too close to local midnight)");
+}
+
 await cleanupLocation(FXLOC);
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
