@@ -231,17 +231,19 @@ role === "admin"  أو  type === "agency"   →  manager
 
 | Method | Path | الوصف |
 |---|---|---|
-| GET | `/me/status?since=` | `{ open_session: {id, started_at} \| null, worked_sec, server_time }`. `since` افتراضياً آخر 24 ساعة. |
+| GET | `/me/status?since=` | `{ open_session: {id, started_at, break_sec} \| null, open_break: {id, started_at} \| null, worked_sec, server_time }`. `worked_sec` بدون الاستراحات. `since` افتراضياً آخر 24 ساعة. |
 | POST | `/session/start` | `201 { id, started_at }` · `409 SESSION_ALREADY_OPEN` |
-| POST | `/session/stop` | `200 { id, started_at, ended_at, duration_sec }` · `409 NO_OPEN_SESSION` |
+| POST | `/session/stop` | `200 { id, started_at, ended_at, duration_sec, break_sec }` — `duration_sec` المدة الكاملة، ووقت العمل = `duration_sec − break_sec`. إذا في استراحة مفتوحة بتسكّر معها · `409 NO_OPEN_SESSION` |
+| POST | `/session/break/start` | `201 { id, session_id, started_at }` · `403 BREAKS_DISABLED` · `409 NO_OPEN_SESSION` · `409 BREAK_ALREADY_OPEN` |
+| POST | `/session/break/stop` | `200 { id, started_at, ended_at, duration_sec }` · `409 NO_OPEN_BREAK` — مسموح حتى لو المدير لغى الاستراحات |
 
 ### المدير (`role = manager` فقط، غير هيك `403 FORBIDDEN`)
 
 | Method | Path | الوصف |
 |---|---|---|
-| GET | `/admin/live` | كل الموظفين مع الجلسة المفتوحة لكل واحد (المفتوحين أول شي) |
+| GET | `/admin/live` | كل الموظفين مع الجلسة المفتوحة لكل واحد (المفتوحين أول شي)، ومع كل موظف `break_started_at` إذا هو باستراحة |
 | GET | `/admin/report?from=&to=` | لكل موظف: `worked_sec`, `sessions_count`, `days_present`, `auto_closed` + `daily_target_hours`, `timezone` |
-| GET | `/admin/sessions?from=&to=&user_id=` | قائمة الجلسات (حد أقصى 1000)، `user_id` اختياري |
+| GET | `/admin/sessions?from=&to=&user_id=` | قائمة الجلسات (حد أقصى 1000)، `user_id` اختياري، مع `break_sec` لكل جلسة |
 | PATCH | `/admin/sessions/:id` | Body: `{ started_at, ended_at, reason }` — السبب إجباري |
 | GET | `/admin/export.csv?from=&to=` | CSV مع BOM (لحتى الـ Excel يقرأ العربي صح)، الأوقات بالـ timezone تبع الحساب |
 | GET | `/admin/settings` | الإعدادات الحالية |
@@ -269,6 +271,9 @@ role === "admin"  أو  type === "agency"   →  manager
 | `DEV_LOGIN_DISABLED` | 404 | dev-login مطلوب بالإنتاج | (تطوير فقط) |
 | `INVALID_BREAKS` | 400 | `breaks_enabled` مش boolean | إعداد الاستراحات غير صحيح |
 | `INVALID_NOTE_POLICY` | 400 | `note_on_stop` مش من القيم المسموحة | إعداد الملاحظة غير صحيح |
+| `BREAKS_DISABLED` | 403 | المدير ما فعّل الاستراحات | الاستراحات غير مفعّلة |
+| `BREAK_ALREADY_OPEN` | 409 | | أنت في استراحة بالفعل |
+| `NO_OPEN_BREAK` | 409 | | لا توجد استراحة مفتوحة |
 | `INTERNAL_ERROR` | 500 | | حدث خطأ، حاول مرة أخرى |
 
 ---

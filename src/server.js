@@ -122,8 +122,23 @@ const managerOnly = async (c, next) => {
 /* Shared SQL                                                          */
 /* ------------------------------------------------------------------ */
 
-// Seconds worked inside [from, to), clipping sessions that cross the window edges.
-const WORKED_EXPR = "GREATEST(0, LEAST(COALESCE(s.ended_at, :now), :to) - GREATEST(s.started_at, :from))";
+// Break seconds inside session `s`, each break clipped to the session's own bounds so a
+// manager edit that shortens a session never leaves more break than duration.
+// A running break counts up to :now.
+const BREAK_SEC_EXPR = `(SELECT COALESCE(SUM(GREATEST(0,
+      LEAST(COALESCE(b.ended_at, :now), COALESCE(s.ended_at, :now))
+      - GREATEST(b.started_at, s.started_at))), 0)
+    FROM breaks b WHERE b.session_id = s.id)`;
+
+// Seconds worked inside [from, to): the session clipped to the window, minus its breaks
+// clipped to the same window and to the session. duration_sec stays wall-clock length;
+// worked time is always derived here, never stored.
+const WORKED_EXPR = `GREATEST(0,
+    LEAST(COALESCE(s.ended_at, :now), :to) - GREATEST(s.started_at, :from)
+    - (SELECT COALESCE(SUM(GREATEST(0,
+          LEAST(COALESCE(b.ended_at, :now), COALESCE(s.ended_at, :now), :to)
+          - GREATEST(b.started_at, s.started_at, :from))), 0)
+         FROM breaks b WHERE b.session_id = s.id))`;
 
 async function getSettings(loc) {
   const rows = await q("SELECT * FROM settings WHERE location_id = :loc", { loc });
@@ -150,6 +165,16 @@ async function autoCloseStale(loc = null) {
         AND :now - s.started_at > st.max_session_hours * 3600
         AND (:loc IS NULL OR s.location_id = :loc)`,
     { now: now(), loc }
+  );
+  // A session closed while on a break (auto-close above, or a manager edit that set its
+  // end) leaves that break open; end it at the session's end so it never dangles.
+  await q(
+    `UPDATE breaks b
+       JOIN sessions s ON s.id = b.session_id
+        SET b.ended_at = GREATEST(b.started_at, s.ended_at)
+      WHERE b.ended_at IS NULL AND s.ended_at IS NOT NULL
+        AND (:loc IS NULL OR b.location_id = :loc)`,
+    { loc }
   );
 }
 
@@ -235,9 +260,14 @@ app.get("/me/status", authed, async (c) => {
   const from = intParam(c, "since", t - 86400);
 
   const open = await q(
-    "SELECT id, started_at FROM sessions WHERE user_id = :uid AND location_id = :loc AND ended_at IS NULL",
-    { uid, loc }
+    `SELECT s.id, s.started_at, ${BREAK_SEC_EXPR} AS break_sec
+       FROM sessions s
+      WHERE s.user_id = :uid AND s.location_id = :loc AND s.ended_at IS NULL`,
+    { uid, loc, now: t }
   );
+  const brk = open.length
+    ? await q("SELECT id, started_at FROM breaks WHERE session_id = :sid AND ended_at IS NULL", { sid: open[0].id })
+    : [];
   const total = await q(
     `SELECT COALESCE(SUM(${WORKED_EXPR}), 0) AS worked_sec
        FROM sessions s
@@ -245,7 +275,14 @@ app.get("/me/status", authed, async (c) => {
         AND s.started_at < :to AND (s.ended_at IS NULL OR s.ended_at > :from)`,
     { now: t, to: t, from, uid, loc }
   );
-  return c.json({ open_session: open[0] ?? null, worked_sec: Number(total[0].worked_sec), server_time: t });
+  return c.json({
+    open_session: open[0]
+      ? { id: open[0].id, started_at: Number(open[0].started_at), break_sec: Number(open[0].break_sec) }
+      : null,
+    open_break: brk[0] ? { id: brk[0].id, started_at: Number(brk[0].started_at) } : null,
+    worked_sec: Number(total[0].worked_sec),
+    server_time: t,
+  });
 });
 
 app.get("/me/settings", authed, async (c) => {
@@ -265,14 +302,14 @@ app.get("/me/sessions", authed, async (c) => {
   const days = intParam(c, "days", 7);
   if (days < 1 || days > 31) throw new HttpError(400, "INVALID_DAYS");
   const from = now() - days * 86400;
-  const sessions = await q(
-    `SELECT id, started_at, ended_at, duration_sec, closed_by
-       FROM sessions
-      WHERE user_id = :uid AND location_id = :loc AND started_at >= :from
-      ORDER BY started_at DESC
+  const sessions = (await q(
+    `SELECT s.id, s.started_at, s.ended_at, s.duration_sec, s.closed_by, ${BREAK_SEC_EXPR} AS break_sec
+       FROM sessions s
+      WHERE s.user_id = :uid AND s.location_id = :loc AND s.started_at >= :from
+      ORDER BY s.started_at DESC
       LIMIT 100`,
-    { uid, loc, from }
-  );
+    { uid, loc, from, now: now() }
+  )).map((r) => ({ ...r, break_sec: Number(r.break_sec) }));
   const st = await getSettings(loc);
   return c.json({ sessions, timezone: st?.timezone ?? "Asia/Riyadh" });
 });
@@ -294,6 +331,48 @@ app.post("/session/start", authed, async (c) => {
   return c.json({ id, started_at: t }, 201);
 });
 
+app.post("/session/break/start", authed, async (c) => {
+  const { uid, loc } = c.get("claims");
+  await autoCloseStale(loc);
+  if (!(await getSettings(loc))?.breaks_enabled) throw new HttpError(403, "BREAKS_DISABLED");
+  const [s] = await q(
+    "SELECT id FROM sessions WHERE user_id = :uid AND location_id = :loc AND ended_at IS NULL",
+    { uid, loc }
+  );
+  if (!s) throw new HttpError(409, "NO_OPEN_SESSION");
+  const id = randomUUID();
+  const t = now();
+  try {
+    await q(
+      "INSERT INTO breaks (id, session_id, location_id, started_at) VALUES (:id, :sid, :loc, :t)",
+      { id, sid: s.id, loc, t }
+    );
+  } catch (e) {
+    if (e.code === "ER_DUP_ENTRY") throw new HttpError(409, "BREAK_ALREADY_OPEN");
+    throw e;
+  }
+  return c.json({ id, session_id: s.id, started_at: t }, 201);
+});
+
+app.post("/session/break/stop", authed, async (c) => {
+  const { uid, loc } = c.get("claims");
+  await autoCloseStale(loc);
+  // Ending a break is allowed even if the manager disabled breaks meanwhile —
+  // otherwise the employee would be stuck on a break that can never end.
+  const [b] = await q(
+    `SELECT b.id, b.started_at
+       FROM breaks b
+       JOIN sessions s ON s.id = b.session_id
+      WHERE s.user_id = :uid AND s.location_id = :loc AND s.ended_at IS NULL AND b.ended_at IS NULL`,
+    { uid, loc }
+  );
+  if (!b) throw new HttpError(409, "NO_OPEN_BREAK");
+  const t = now();
+  const started = Number(b.started_at);
+  await q("UPDATE breaks SET ended_at = :t WHERE id = :id AND ended_at IS NULL", { t, id: b.id });
+  return c.json({ id: b.id, started_at: started, ended_at: t, duration_sec: t - started });
+});
+
 app.post("/session/stop", authed, async (c) => {
   const { uid, loc } = c.get("claims");
   await autoCloseStale(loc);
@@ -311,8 +390,20 @@ app.post("/session/stop", authed, async (c) => {
       "UPDATE sessions SET ended_at = :t, duration_sec = :dur, closed_by = 'user' WHERE id = :id",
       { t, dur: t - s.started_at, id: s.id }
     );
+    // Stopping during a break ends the break at the same instant.
+    await conn.execute(
+      "UPDATE breaks SET ended_at = :t WHERE session_id = :id AND ended_at IS NULL",
+      { t, id: s.id }
+    );
+    const [[brk]] = await conn.execute(
+      "SELECT COALESCE(SUM(ended_at - started_at), 0) AS break_sec FROM breaks WHERE session_id = :id",
+      { id: s.id }
+    );
     await conn.commit();
-    return c.json({ id: s.id, started_at: s.started_at, ended_at: t, duration_sec: t - s.started_at });
+    return c.json({
+      id: s.id, started_at: s.started_at, ended_at: t,
+      duration_sec: t - s.started_at, break_sec: Number(brk.break_sec),
+    });
   } catch (e) {
     await conn.rollback().catch(() => {});
     throw e;
@@ -327,9 +418,10 @@ app.get("/admin/live", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
   await autoCloseStale(loc);
   const employees = await q(
-    `SELECT e.user_id, e.name, e.email, s.id AS session_id, s.started_at
+    `SELECT e.user_id, e.name, e.email, s.id AS session_id, s.started_at, b.started_at AS break_started_at
        FROM employees e
        LEFT JOIN sessions s ON s.user_id = e.user_id AND s.location_id = e.location_id AND s.ended_at IS NULL
+       LEFT JOIN breaks b ON b.session_id = s.id AND b.ended_at IS NULL
       WHERE e.location_id = :loc AND e.is_active = 1
       ORDER BY s.started_at IS NULL, e.name`,
     { loc }
@@ -441,16 +533,17 @@ app.get("/admin/sessions", authed, managerOnly, async (c) => {
   const to = intParam(c, "to");
   const uid = c.req.query("user_id") ?? null;
   await autoCloseStale(loc);
-  const sessions = await q(
-    `SELECT s.id, s.user_id, e.name, s.started_at, s.ended_at, s.duration_sec, s.closed_by
+  const sessions = (await q(
+    `SELECT s.id, s.user_id, e.name, s.started_at, s.ended_at, s.duration_sec, s.closed_by,
+            ${BREAK_SEC_EXPR} AS break_sec
        FROM sessions s
        JOIN employees e ON e.user_id = s.user_id AND e.location_id = s.location_id
       WHERE s.location_id = :loc AND s.started_at >= :from AND s.started_at < :to
         AND (:uid IS NULL OR s.user_id = :uid)
       ORDER BY s.started_at DESC
       LIMIT 1000`,
-    { loc, from, to, uid }
-  );
+    { loc, from, to, uid, now: now() }
+  )).map((r) => ({ ...r, break_sec: Number(r.break_sec) }));
 
   // Annotate each session with how late it was, so the manager can audit the
   // late_days count in /admin/report instead of just seeing a total.

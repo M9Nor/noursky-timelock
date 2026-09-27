@@ -317,6 +317,61 @@ check("employee sees the break and note policy",
   p2Me.body?.breaks_enabled === true && p2Me.body?.note_on_stop === "optional",
   `(${JSON.stringify(p2Me.body)})`);
 
+// Breaks. A disabled policy refuses a break outright.
+await p2Policy(false, "off");
+await call(PE, "POST", "/session/start");
+check("break while breaks are disabled → 403",
+  (await call(PE, "POST", "/session/break/start")).body?.error === "BREAKS_DISABLED");
+await call(PE, "POST", "/session/stop");
+await p2Policy(true, "off");
+check("break without an open session → 409",
+  (await call(PE, "POST", "/session/break/start")).body?.error === "NO_OPEN_SESSION");
+
+const p2Open = await call(PE, "POST", "/session/start");
+const b1 = await call(PE, "POST", "/session/break/start");
+check("break starts on the open session",
+  b1.status === 201 && b1.body?.session_id === p2Open.body?.id, `(status ${b1.status})`);
+check("a second open break → 409",
+  (await call(PE, "POST", "/session/break/start")).body?.error === "BREAK_ALREADY_OPEN");
+const onBreak = await call(PE, "GET", "/me/status");
+check("status reports the open break", onBreak.body?.open_break?.id === b1.body?.id,
+  `(${JSON.stringify(onBreak.body?.open_break)})`);
+const p2Live = await call(PM, "GET", "/admin/live");
+check("live floor shows who is on a break",
+  p2Live.body?.employees?.find((e) => e.user_id === `${P2LOC}-u1`)?.break_started_at === b1.body?.started_at);
+await sleep(2100);
+const b1Stop = await call(PE, "POST", "/session/break/stop");
+check("break stops", b1Stop.status === 200 && b1Stop.body?.duration_sec >= 2,
+  `(status ${b1Stop.status}, ${JSON.stringify(b1Stop.body)})`);
+check("stopping with no open break → 409",
+  (await call(PE, "POST", "/session/break/stop")).body?.error === "NO_OPEN_BREAK");
+const afterBreak = await call(PE, "GET", "/me/status");
+check("status carries the closed break time of the open session",
+  afterBreak.body?.open_break === null && afterBreak.body?.open_session?.break_sec === b1Stop.body?.duration_sec,
+  `(${JSON.stringify(afterBreak.body?.open_session)})`);
+
+// Stopping during a second break ends that break at the same instant.
+const b2 = await call(PE, "POST", "/session/break/start");
+await sleep(1100);
+const p2Stop = await call(PE, "POST", "/session/stop");
+const expectedBreak = b1Stop.body?.duration_sec + (p2Stop.body?.ended_at - b2.body?.started_at);
+check("stop during a break ends the break with the session",
+  p2Stop.status === 200 && p2Stop.body?.break_sec === expectedBreak,
+  `(break_sec ${JSON.stringify(p2Stop.body?.break_sec)}, expected ${expectedBreak})`);
+
+const p2From = p2Open.body?.started_at, p2To = p2Stop.body?.ended_at + 10;
+const p2Rows = await call(PM, "GET", `/admin/sessions?from=${p2From}&to=${p2To}&user_id=${P2LOC}-u1`);
+check("session detail carries break_sec",
+  p2Rows.body?.sessions?.find((x) => x.id === p2Open.body?.id)?.break_sec === p2Stop.body?.break_sec);
+const p2Mine = await call(PE, "GET", "/me/sessions?days=1");
+check("employee history carries break_sec",
+  p2Mine.body?.sessions?.find((x) => x.id === p2Open.body?.id)?.break_sec === p2Stop.body?.break_sec);
+const p2Report = await call(PM, "GET", `/admin/report?from=${p2From}&to=${p2To}`);
+const p2Worked = p2Report.body?.employees?.find((e) => e.user_id === `${P2LOC}-u1`)?.worked_sec;
+check("report worked time excludes breaks",
+  p2Worked === p2Stop.body?.duration_sec - p2Stop.body?.break_sec,
+  `(worked ${p2Worked}, duration ${p2Stop.body?.duration_sec}, break ${p2Stop.body?.break_sec})`);
+
 await cleanupLocation(P2LOC);
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
