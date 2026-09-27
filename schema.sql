@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS settings (
   daily_target_hours DECIMAL(4,2) NOT NULL DEFAULT 8,
   work_start         CHAR(5)      NULL DEFAULT '09:00',
   late_grace_minutes INT          NOT NULL DEFAULT 15,
+  breaks_enabled     TINYINT(1)   NOT NULL DEFAULT 0,
+  note_on_stop       ENUM('off','optional','required') NOT NULL DEFAULT 'off',
   max_session_hours  DECIMAL(4,2) NOT NULL DEFAULT 12,
   updated_at         BIGINT       NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -33,6 +35,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   ended_at     BIGINT      NULL,
   duration_sec BIGINT      NULL,
   closed_by    ENUM('user','auto','admin') NULL,
+  note         VARCHAR(500) NULL,
   created_at   BIGINT      NOT NULL,
   -- 1 while the session is open, NULL once closed. UNIQUE allows many NULLs,
   -- so this enforces "one open session per employee per sub-account".
@@ -54,4 +57,17 @@ CREATE TABLE IF NOT EXISTS edits_log (
   reason         VARCHAR(500) NOT NULL,
   created_at     BIGINT       NOT NULL,
   KEY ix_edits_session (session_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS breaks (
+  id          CHAR(36)    NOT NULL PRIMARY KEY,
+  session_id  CHAR(36)    NOT NULL,
+  location_id VARCHAR(64) NOT NULL,
+  started_at  BIGINT      NOT NULL,
+  ended_at    BIGINT      NULL,
+  -- 1 while the break is open, NULL once ended → one open break per session.
+  open_flag   TINYINT GENERATED ALWAYS AS (IF(ended_at IS NULL, 1, NULL)) STORED,
+  UNIQUE KEY ux_one_open_break (session_id, open_flag),
+  KEY ix_breaks_session (session_id),
+  KEY ix_breaks_loc (location_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

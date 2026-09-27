@@ -82,7 +82,7 @@ async function cleanupLocation(loc) {
       database: cfg.DB_NAME,
       namedPlaceholders: true,
     });
-    for (const table of ["edits_log", "sessions", "employees", "settings"]) {
+    for (const table of ["breaks", "edits_log", "sessions", "employees", "settings"]) {
       await conn.execute(`DELETE FROM ${table} WHERE location_id = :loc`, { loc });
     }
     console.log(`  (cleaned up fixture location ${loc})`);
@@ -291,6 +291,33 @@ check("DST: session detail uses each date's own offset",
   winterRow?.late_by_sec === null && summerRow?.late_by_sec === 900,
   `(winter ${JSON.stringify(winterRow?.late_by_sec)}, summer ${JSON.stringify(summerRow?.late_by_sec)})`);
 await cleanupLocation(DSTLOC);
+
+// --- Phase 2: breaks and note on stop. Runs on its own location so the policies it
+// --- switches on cannot leak into the checks above; its rows are removed at the end.
+const P2LOC = `${LOC}-p2`;
+const p2Mgr = await sso({ userId: `${P2LOC}-m1`, role: "admin", type: "account", activeLocation: P2LOC, userName: "مدير المرحلة 2", email: "pm@x.com" });
+const p2Emp = await sso({ userId: `${P2LOC}-u1`, role: "user", type: "account", activeLocation: P2LOC, userName: "موظف المرحلة 2", email: "pe@x.com" });
+const PM = p2Mgr.body?.token, PE = p2Emp.body?.token;
+const p2Base = { timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: null, late_grace_minutes: 15 };
+const p2Policy = (breaks_enabled, note_on_stop) =>
+  call(PM, "PUT", "/admin/settings", { ...p2Base, breaks_enabled, note_on_stop });
+
+const p2Defaults = await call(PM, "GET", "/admin/settings");
+check("phase 2 settings default to off",
+  p2Defaults.body?.breaks_enabled === false && p2Defaults.body?.note_on_stop === "off",
+  `(${JSON.stringify({ b: p2Defaults.body?.breaks_enabled, n: p2Defaults.body?.note_on_stop })})`);
+const p2Saved = await p2Policy(true, "optional");
+check("phase 2 settings saved",
+  p2Saved.status === 200 && p2Saved.body?.breaks_enabled === true && p2Saved.body?.note_on_stop === "optional",
+  `(status ${p2Saved.status}, ${JSON.stringify(p2Saved.body)})`);
+check("invalid note policy → 400", (await p2Policy(true, "sometimes")).body?.error === "INVALID_NOTE_POLICY");
+check("non-boolean breaks_enabled → 400", (await p2Policy("yes", "off")).body?.error === "INVALID_BREAKS");
+const p2Me = await call(PE, "GET", "/me/settings");
+check("employee sees the break and note policy",
+  p2Me.body?.breaks_enabled === true && p2Me.body?.note_on_stop === "optional",
+  `(${JSON.stringify(p2Me.body)})`);
+
+await cleanupLocation(P2LOC);
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
 

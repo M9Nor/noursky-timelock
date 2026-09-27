@@ -20,3 +20,4 @@ When adding a column: add it to `schema.sql` **and** add the next numbered file 
 | File | Production | Notes |
 |---|---|---|
 | `001_late_grace_minutes.sql` | 2026-09-26 | run manually in phpMyAdmin before phase 1 deploy |
+| `002_breaks_and_notes.sql` | pending | apply before deploying phase 2 |

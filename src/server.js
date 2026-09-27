@@ -127,8 +127,12 @@ const WORKED_EXPR = "GREATEST(0, LEAST(COALESCE(s.ended_at, :now), :to) - GREATE
 
 async function getSettings(loc) {
   const rows = await q("SELECT * FROM settings WHERE location_id = :loc", { loc });
-  return rows[0] ?? null;
+  const st = rows[0];
+  // TINYINT(1) arrives as 0/1; the API speaks booleans.
+  return st ? { ...st, breaks_enabled: Boolean(st.breaks_enabled) } : null;
 }
+
+const NOTE_POLICIES = ["off", "optional", "required"];
 
 /**
  * Caps forgotten sessions at max_session_hours and flags them 'auto'.
@@ -250,6 +254,8 @@ app.get("/me/settings", authed, async (c) => {
     daily_target_hours: Number(st?.daily_target_hours ?? 8),
     timezone: st?.timezone ?? "Asia/Riyadh",
     work_start: st?.work_start ?? null,
+    breaks_enabled: Boolean(st?.breaks_enabled),
+    note_on_stop: st?.note_on_stop ?? "off",
   });
 });
 
@@ -576,12 +582,18 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   const rawGrace = b.late_grace_minutes;
   const grace = rawGrace === undefined || rawGrace === null || rawGrace === "" ? 15 : Number(rawGrace);
   if (!Number.isInteger(grace) || grace < 0 || grace > 240) throw new HttpError(400, "INVALID_GRACE");
+  // PUT replaces the whole policy: an omitted field means the default, not "unchanged".
+  const breaks = b.breaks_enabled === undefined ? false : b.breaks_enabled;
+  if (typeof breaks !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
+  const notePolicy = b.note_on_stop === undefined ? "off" : b.note_on_stop;
+  if (!NOTE_POLICIES.includes(notePolicy)) throw new HttpError(400, "INVALID_NOTE_POLICY");
 
   await q(
     `UPDATE settings SET timezone = :tz, daily_target_hours = :target, work_start = :ws,
-                         late_grace_minutes = :grace, max_session_hours = :max, updated_at = :t
+                         late_grace_minutes = :grace, max_session_hours = :max,
+                         breaks_enabled = :breaks, note_on_stop = :notePolicy, updated_at = :t
       WHERE location_id = :loc`,
-    { tz: b.timezone, target, ws: b.work_start ?? null, grace, max, t: now(), loc }
+    { tz: b.timezone, target, ws: b.work_start ?? null, grace, max, breaks: breaks ? 1 : 0, notePolicy, t: now(), loc }
   );
   return c.json(await getSettings(loc));
 });

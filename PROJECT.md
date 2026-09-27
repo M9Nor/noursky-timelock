@@ -245,7 +245,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | PATCH | `/admin/sessions/:id` | Body: `{ started_at, ended_at, reason }` — السبب إجباري |
 | GET | `/admin/export.csv?from=&to=` | CSV مع BOM (لحتى الـ Excel يقرأ العربي صح)، الأوقات بالـ timezone تبع الحساب |
 | GET | `/admin/settings` | الإعدادات الحالية |
-| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start }` |
+| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, late_grace_minutes, breaks_enabled, note_on_stop }` — `breaks_enabled` boolean (افتراضي `false`)، `note_on_stop` واحد من `off`/`optional`/`required` (افتراضي `off`). الحقل الناقص = القيمة الافتراضية |
 
 ### رموز الأخطاء
 
@@ -267,6 +267,8 @@ role === "admin"  أو  type === "agency"   →  manager
 | `INVALID_DAYS` | 400 | عدد الأيام خارج المدى (1–31) | صحّح القيمة |
 | `SESSION_NOT_FOUND` | 404 | | |
 | `DEV_LOGIN_DISABLED` | 404 | dev-login مطلوب بالإنتاج | (تطوير فقط) |
+| `INVALID_BREAKS` | 400 | `breaks_enabled` مش boolean | إعداد الاستراحات غير صحيح |
+| `INVALID_NOTE_POLICY` | 400 | `note_on_stop` مش من القيم المسموحة | إعداد الملاحظة غير صحيح |
 | `INTERNAL_ERROR` | 500 | | حدث خطأ، حاول مرة أخرى |
 
 ---
