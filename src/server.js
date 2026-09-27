@@ -335,23 +335,36 @@ app.post("/session/break/start", authed, async (c) => {
   const { uid, loc } = c.get("claims");
   await autoCloseStale(loc);
   if (!(await getSettings(loc))?.breaks_enabled) throw new HttpError(403, "BREAKS_DISABLED");
-  const [s] = await q(
-    "SELECT id FROM sessions WHERE user_id = :uid AND location_id = :loc AND ended_at IS NULL",
-    { uid, loc }
-  );
-  if (!s) throw new HttpError(409, "NO_OPEN_SESSION");
-  const id = randomUUID();
-  const t = now();
+  const conn = await pool.getConnection();
   try {
-    await q(
-      "INSERT INTO breaks (id, session_id, location_id, started_at) VALUES (:id, :sid, :loc, :t)",
-      { id, sid: s.id, loc, t }
+    await conn.beginTransaction();
+    // Lock the open session so a concurrent /session/stop cannot close it between this
+    // read and the break insert, which would otherwise open a break on a closed session.
+    const [rows] = await conn.execute(
+      "SELECT id FROM sessions WHERE user_id = :uid AND location_id = :loc AND ended_at IS NULL FOR UPDATE",
+      { uid, loc }
     );
+    if (!rows.length) throw new HttpError(409, "NO_OPEN_SESSION");
+    const s = rows[0];
+    const id = randomUUID();
+    const t = now();
+    try {
+      await conn.execute(
+        "INSERT INTO breaks (id, session_id, location_id, started_at) VALUES (:id, :sid, :loc, :t)",
+        { id, sid: s.id, loc, t }
+      );
+    } catch (e) {
+      if (e.code === "ER_DUP_ENTRY") throw new HttpError(409, "BREAK_ALREADY_OPEN");
+      throw e;
+    }
+    await conn.commit();
+    return c.json({ id, session_id: s.id, started_at: t }, 201);
   } catch (e) {
-    if (e.code === "ER_DUP_ENTRY") throw new HttpError(409, "BREAK_ALREADY_OPEN");
+    await conn.rollback().catch(() => {});
     throw e;
+  } finally {
+    conn.release();
   }
-  return c.json({ id, session_id: s.id, started_at: t }, 201);
 });
 
 app.post("/session/break/stop", authed, async (c) => {
@@ -359,18 +372,32 @@ app.post("/session/break/stop", authed, async (c) => {
   await autoCloseStale(loc);
   // Ending a break is allowed even if the manager disabled breaks meanwhile —
   // otherwise the employee would be stuck on a break that can never end.
-  const [b] = await q(
-    `SELECT b.id, b.started_at
-       FROM breaks b
-       JOIN sessions s ON s.id = b.session_id
-      WHERE s.user_id = :uid AND s.location_id = :loc AND s.ended_at IS NULL AND b.ended_at IS NULL`,
-    { uid, loc }
-  );
-  if (!b) throw new HttpError(409, "NO_OPEN_BREAK");
-  const t = now();
-  const started = Number(b.started_at);
-  await q("UPDATE breaks SET ended_at = :t WHERE id = :id AND ended_at IS NULL", { t, id: b.id });
-  return c.json({ id: b.id, started_at: started, ended_at: t, duration_sec: t - started });
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    // Lock the open break (joined to its open session) so a double-tap or a race with
+    // /session/stop cannot both find it open and both report success.
+    const [rows] = await conn.execute(
+      `SELECT b.id, b.started_at
+         FROM breaks b
+         JOIN sessions s ON s.id = b.session_id
+        WHERE s.user_id = :uid AND s.location_id = :loc AND s.ended_at IS NULL AND b.ended_at IS NULL
+        FOR UPDATE`,
+      { uid, loc }
+    );
+    if (!rows.length) throw new HttpError(409, "NO_OPEN_BREAK");
+    const b = rows[0];
+    const t = now();
+    const started = Number(b.started_at);
+    await conn.execute("UPDATE breaks SET ended_at = :t WHERE id = :id AND ended_at IS NULL", { t, id: b.id });
+    await conn.commit();
+    return c.json({ id: b.id, started_at: started, ended_at: t, duration_sec: t - started });
+  } catch (e) {
+    await conn.rollback().catch(() => {});
+    throw e;
+  } finally {
+    conn.release();
+  }
 });
 
 app.post("/session/stop", authed, async (c) => {
