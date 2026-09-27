@@ -139,6 +139,8 @@ check("sessions list", !!sid);
 
 const mySessions = await call(E, "GET", "/me/sessions?days=7");
 check("employee sees own sessions", mySessions.status === 200 && Array.isArray(mySessions.body?.sessions) && mySessions.body.sessions.length >= 1);
+check("employee history carries the location timezone",
+  typeof mySessions.body?.timezone === "string" && mySessions.body.timezone.length > 0, `(${mySessions.body?.timezone})`);
 const mgrMine = await call(M, "GET", "/me/sessions?days=7");
 check("manager's own history excludes the employee's rows",
   mgrMine.status === 200 && (mgrMine.body?.sessions ?? []).length === 0, `(status ${mgrMine.status})`);

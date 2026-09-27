@@ -67,6 +67,11 @@ describe("formatStamp", () => {
     expect(formatStamp(ts, "Not/AZone")).toMatch(/2026, \d{2}:\d{2}$/);
   });
 
+  it("can drop the year for compact tables", () => {
+    const ts = Date.UTC(2026, 8, 24, 21, 30) / 1000;
+    expect(formatStamp(ts, "Asia/Riyadh", { year: false })).toBe("25/09, 00:30");
+  });
+
   it("returns a dash for a missing timestamp", () => {
     expect(formatStamp(null, "UTC")).toBe("—");
   });

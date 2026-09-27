@@ -1,19 +1,15 @@
 import { useEffect, useState } from "react";
-import { formatHours } from "../time.js";
-
-const fmt = (ts) =>
-  ts
-    ? new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
-        .format(new Date(Number(ts) * 1000))
-    : "—";
+import { formatHours, formatStamp } from "../time.js";
 
 export default function MyHistory({ api }) {
   const [sessions, setSessions] = useState(null);
+  const [timezone, setTimezone] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     api.get("/me/sessions?days=7")
-      .then((r) => setSessions(r.sessions))
+      // Times follow the company's timezone, not whatever the device is set to.
+      .then((r) => { setTimezone(r.timezone ?? null); setSessions(r.sessions); })
       .catch(() => setError("حدث خطأ، حاول مرة أخرى"));
   }, []);
 
@@ -32,8 +28,8 @@ export default function MyHistory({ api }) {
             <tbody>
               {sessions.map((s) => (
                 <tr key={s.id}>
-                  <td className="ltr">{fmt(s.started_at)}</td>
-                  <td className="ltr">{fmt(s.ended_at)}</td>
+                  <td className="ltr">{formatStamp(s.started_at, timezone, { year: false })}</td>
+                  <td className="ltr">{formatStamp(s.ended_at, timezone, { year: false })}</td>
                   <td className="num">{s.duration_sec ? formatHours(s.duration_sec) : "—"}</td>
                   <td>{s.closed_by === "auto" ? "أُغلقت تلقائياً" : ""}</td>
                 </tr>

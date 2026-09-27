@@ -32,4 +32,17 @@ describe("MyHistory", () => {
     render(<MyHistory api={api} />);
     expect(await screen.findByText("لا توجد جلسات في آخر 7 أيام.")).toBeInTheDocument();
   });
+  it("renders times in the company timezone, not the device one", async () => {
+    // 21:30Z is 17:30 on the 24th in New York — far from any Gulf/Turkey device clock.
+    const start = Date.UTC(2026, 8, 24, 21, 30) / 1000;
+    const api = {
+      get: vi.fn(async () => ({
+        timezone: "America/New_York",
+        sessions: [{ id: "c", started_at: start, ended_at: null, duration_sec: null, closed_by: null }],
+      })),
+    };
+    render(<MyHistory api={api} />);
+    expect(await screen.findByText("24/09, 17:30")).toBeInTheDocument();
+    expect(api.get).toHaveBeenCalledWith("/me/sessions?days=7");
+  });
 });

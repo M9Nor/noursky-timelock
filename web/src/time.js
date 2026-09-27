@@ -31,10 +31,11 @@ export function formatLateness(sec) {
   const mm = m % 60;
   return mm ? `متأخر ${h} س ${mm} د` : `متأخر ${h} س`;
 }
-export function formatStamp(ts, timeZone) {
+export function formatStamp(ts, timeZone, { year = true } = {}) {
   if (!ts) return "—";
   const d = new Date(Number(ts) * 1000);
-  const opts = { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false };
+  const opts = { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false };
+  if (year) opts.year = "numeric";
   try {
     return new Intl.DateTimeFormat("en-GB", timeZone ? { ...opts, timeZone } : opts).format(d);
   } catch {

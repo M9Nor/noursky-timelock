@@ -278,7 +278,8 @@ app.get("/me/sessions", authed, async (c) => {
       LIMIT 100`,
     { uid, loc, from }
   );
-  return c.json({ sessions });
+  const st = await getSettings(loc);
+  return c.json({ sessions, timezone: st?.timezone ?? "Asia/Riyadh" });
 });
 
 app.post("/session/start", authed, async (c) => {

@@ -88,14 +88,15 @@ describe("ReportPanel", () => {
   });
 
   it("renders detail timestamps in the location timezone, not the browser one", async () => {
-    const start = Date.UTC(2026, 8, 24, 21, 30) / 1000; // already the 25th in Asia/Riyadh
+    // 21:30Z is 17:30 on the 24th in New York — far from any Gulf/Turkey device clock.
+    const start = Date.UTC(2026, 8, 24, 21, 30) / 1000;
     const api = makeApi({
-      timezone: "Asia/Riyadh",
+      timezone: "America/New_York",
       sessions: [{ id: 1, user_id: "a", started_at: start, ended_at: null, closed_by: null, late_by_sec: null }],
     });
     wrap(<ReportPanel api={api} />);
     fireEvent.click(await screen.findByText("أحمد"));
-    expect(await screen.findByText("25/09/2026, 00:30")).toBeInTheDocument();
+    expect(await screen.findByText("24/09/2026, 17:30")).toBeInTheDocument();
   });
 
   it("leaves the lateness column empty when work_start is not configured", async () => {
