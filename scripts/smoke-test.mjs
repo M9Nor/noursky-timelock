@@ -560,6 +560,17 @@ check("a paid fixed window deducts nothing", (await fxBreakSec(fxPaidId, fxMidni
 
     await fxPolicy(livePolicy);
     await setPolicySince(FXLOC, winStartUtc - 60);
+    // A manager edit of an OPEN session inside a begun-but-unrecorded window: the edit
+    // skips windows its old bounds already covered, so the window is recorded first.
+    const edited = await call(FE, "POST", "/session/start");
+    await sleep(1100);
+    const editEnd = Math.floor(Date.now() / 1000);
+    await call(FM, "PATCH", `/admin/sessions/${edited.body?.id}`,
+      { started_at: edited.body?.started_at, ended_at: editEnd, reason: "إغلاق جلسة مفتوحة داخل النافذة" });
+    const editedBreak = await fxBreakSec(edited.body?.id, edited.body?.started_at - 10);
+    check("editing an open session keeps the window it is in",
+      editedBreak === editEnd - edited.body?.started_at, `(break ${editedBreak}, duration ${editEnd - edited.body?.started_at})`);
+
     await call(FE, "POST", "/session/start");
     await sleep(2100);
     const liveStatus = await call(FE, "GET", "/me/status");

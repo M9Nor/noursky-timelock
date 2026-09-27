@@ -753,6 +753,9 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
   if (!reason) throw new HttpError(400, "REASON_REQUIRED");
   const s = body.started_at, e = body.ended_at;
   if (!Number.isInteger(s) || !Number.isInteger(e) || e <= s || e > now()) throw new HttpError(400, "INVALID_TIMES");
+  // An open session may be inside a window that has begun but isn't recorded yet; record
+  // it now, because the edit below skips every window the old bounds already covered.
+  await recordOpenFixedBreaks(loc);
   const st = await getSettings(loc);
 
   const conn = await pool.getConnection();
