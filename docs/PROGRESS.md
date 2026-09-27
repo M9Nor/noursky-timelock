@@ -4,29 +4,22 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `feature/attendance-policies-phase1` (not yet merged/pushed to `main`
-  — see below) · **Last deploy:** live at `https://timeclock.noursky.com`
-  (`/health` returns `{"ok":true}`, DB connected) is still on the pre-phase-1 code;
-  the production DB has **not** received the `late_grace_minutes` migration yet.
-- **Works:** Backend API (auth/SSO, sessions, admin report/live/sessions/settings,
-  CSV export, auto-close). Redesigned React frontend (light theme, RTL): employee
-  hero clock (Start/Stop, live server-time timer, today/week totals), manager
-  dashboard (KPIs, live floor, report table with custom date range + search + CSV,
-  session edit modal, settings). Auto-deploy on push to `main` (Hostinger Git).
-  **Attendance policies phase 1 shipped on this branch** (not yet merged): a
-  per-account `late_grace_minutes` setting (0–240, validated), lateness computed
-  from `work_start` + grace and shown per employee as "أيام التأخير" in the manager
-  report, the employee daily target read from the account's real
-  `daily_target_hours` instead of a hardcoded 8h, and a new "سجلّي — آخر 7 أيام"
-  panel showing the employee's own last-7-days session history. The final
-  whole-branch review's four findings are fixed on top. 44/44 frontend Vitest tests
-  pass; 35/35 backend smoke-test checks pass locally; production build succeeds.
-- **Not done / broken:** GHL Marketplace app not yet created, so **real SSO login
-  is not wired** — outside a GHL iframe the app shows the dev role-picker (dev build)
-  or "session expired" (prod build). `GHL_SHARED_SECRET` on Hostinger is a temporary
-  placeholder. Backend smoke test has been run locally only — **not yet run against
-  the live DB**, and the phase-1 migration + deploy to production (`main`) is a
-  deliberately separate, not-yet-authorised step (see Open Questions / Blockers).
+- **Branch:** `main` · **Last deploy:** `2fab666` live at `https://timeclock.noursky.com`
+  (bundle `index-C6aTDy2o.js`, `/health` ok). The `late_grace_minutes` migration has
+  been applied to the production DB.
+- **Works:** Backend API (auth/SSO via the private GHL Marketplace app, sessions,
+  admin report/live/sessions/settings, CSV export, auto-close). React frontend (light
+  theme, RTL): employee hero clock + "سجلّي — آخر 7 أيام" history with the account's
+  real daily target; manager dashboard (KPIs, live floor, report with custom range +
+  search + CSV, session edit modal, settings). **Attendance policies phase 1 is live:**
+  per-account `late_grace_minutes` (0–240), "أيام التأخير" per employee, and — new —
+  a "التأخير" column in the employee session drill-down (`متأخر 5 س 37 د`) driven by
+  `late_by_sec` from `GET /admin/sessions`; drill-down times now render in the
+  location timezone. Verified live inside GHL (Innova): the 3 late days match the
+  count. 54/54 frontend tests, 38/38 smoke checks locally.
+- **Not done / known minors:** see Next Steps (tzOffsetSec 1-second bug, DST offset
+  snapshot, `MyHistory` still renders in browser timezone, no committed migration
+  file). Production still holds `smoke-%` / `dev-local` test rows.
 
 ## In Progress
 - Nothing mid-flight. The frontend redesign (spec `docs/superpowers/specs/2026-09-19-frontend-redesign-design.md`,
@@ -81,6 +74,14 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-09-27** · Manager can now audit lateness per session: `GET /admin/sessions`
+  returns `late_by_sec` (non-null only for the local day's first session past
+  `work_start + grace`, with the day's first resolved over the whole local day, not the
+  requested window) plus `timezone`/`work_start`; ReportPanel drill-down gained a
+  "التأخير" column and location-timezone timestamps (`formatLateness`/`formatStamp` in
+  `web/src/time.js`). Files: `src/server.js`, `scripts/smoke-test.mjs`,
+  `web/src/components/ReportPanel.jsx`, `web/src/time.js`, `web/src/styles.css`, tests.
+  54/54 frontend, 38/38 smoke. Pushed + verified live · `2fab666`.
 - **2026-09-26** · Fixed the four findings from the final whole-branch review of
   `feature/attendance-policies-phase1`: (1) `late_days` no longer counts local days
   with no session overlapping `[from, to)` — an `EXISTS` subquery narrows the candidate
