@@ -8,9 +8,12 @@
     "start": "node src/server.js",
     "build": "node scripts/build-web.mjs",
     "postinstall": "node scripts/build-web.mjs",
-    "test:smoke": "node scripts/smoke-test.mjs"
+    "test:smoke": "node scripts/smoke-test.mjs",
+    "test:unit": "node --test src/tz.test.mjs"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
     "hono": "^4.6.0",

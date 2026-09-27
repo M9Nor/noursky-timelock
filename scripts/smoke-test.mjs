@@ -257,6 +257,41 @@ check("a later session on the same day is not marked late",
 // run pointed at a remote/production host simply skips it and leaves that DB untouched.
 await cleanupLocation(TZLOC);
 
+// --- DST: a report window spanning a daylight-saving change must use the offset in force
+// --- on each session's own date, not today's. Europe/Berlin, work_start 09:00, grace 15.
+// --- 07:30Z is 08:30 local on 2026-03-20 (CET, on time) but 09:30 local on 2026-04-10
+// --- (CEST, 15 min late). A single offset snapshot gets exactly one of them wrong in any
+// --- season, so late_days === 1 holds only when each date gets its own offset.
+const DSTLOC = `${LOC}-dst`;
+const dstMgr = await sso({ userId: `${DSTLOC}-m1`, role: "admin", type: "account", activeLocation: DSTLOC, userName: "مدير برلين", email: "dm@x.com" });
+const dstEmp = await sso({ userId: `${DSTLOC}-u1`, role: "user", type: "account", activeLocation: DSTLOC, userName: "موظف برلين", email: "de@x.com" });
+const DM = dstMgr.body?.token, DE = dstEmp.body?.token;
+await call(DM, "PUT", "/admin/settings",
+  { timezone: "Europe/Berlin", daily_target_hours: 8, max_session_hours: 24, work_start: "09:00", late_grace_minutes: 15 });
+const utcSec = (...a) => Date.UTC(...a) / 1000;
+async function dstSession(startedAt) {
+  const open = await call(DE, "POST", "/session/start");
+  await call(DE, "POST", "/session/stop");
+  await call(DM, "PATCH", `/admin/sessions/${open.body?.id}`,
+    { started_at: startedAt, ended_at: startedAt + 3600, reason: "جلسة توقيت صيفي للاختبار" });
+  return open.body?.id;
+}
+const winterId = await dstSession(utcSec(2026, 2, 20, 7, 30));
+const summerId = await dstSession(utcSec(2026, 3, 10, 7, 30));
+const dstFrom = utcSec(2026, 2, 19), dstTo = utcSec(2026, 3, 12);
+const dstReport = await call(DM, "GET", `/admin/report?from=${dstFrom}&to=${dstTo}`);
+const dstRow = dstReport.body?.employees?.find((e) => e.user_id === `${DSTLOC}-u1`);
+check("DST: only the summer-time 09:30 counts as late across the change",
+  dstRow?.late_days === 1 && Number(dstRow?.days_present) === 2,
+  `(late_days ${JSON.stringify(dstRow?.late_days)}, days_present ${JSON.stringify(dstRow?.days_present)})`);
+const dstList = await call(DM, "GET", `/admin/sessions?from=${dstFrom}&to=${dstTo}&user_id=${DSTLOC}-u1`);
+const winterRow = dstList.body?.sessions?.find((x) => x.id === winterId);
+const summerRow = dstList.body?.sessions?.find((x) => x.id === summerId);
+check("DST: session detail uses each date's own offset",
+  winterRow?.late_by_sec === null && summerRow?.late_by_sec === 900,
+  `(winter ${JSON.stringify(winterRow?.late_by_sec)}, summer ${JSON.stringify(summerRow?.late_by_sec)})`);
+await cleanupLocation(DSTLOC);
+
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
 
 // --- dev-login (only meaningful when the target server runs with NODE_ENV != production) ---

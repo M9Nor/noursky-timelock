@@ -9,6 +9,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { cors } from "hono/cors";
 import mysql from "mysql2/promise";
 import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID } from "node:crypto";
+import { localZone } from "./tz.js";
 
 /* ------------------------------------------------------------------ */
 /* Config                                                              */
@@ -58,18 +59,6 @@ function intParam(c, key, fallback) {
   const n = Number(v);
   if (!Number.isInteger(n) || n < 0) throw new HttpError(400, `INVALID_${key.toUpperCase()}`);
   return n;
-}
-
-/** Offset (seconds) of an IANA timezone from UTC at a given moment. */
-function tzOffsetSec(tz, at = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz, hourCycle: "h23",
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
-  }).formatToParts(at);
-  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
-  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
-  return Math.round((asUTC - at.getTime()) / 1000);
 }
 
 /* ------------------------------------------------------------------ */
@@ -342,6 +331,19 @@ app.get("/admin/live", authed, managerOnly, async (c) => {
   return c.json({ server_time: now(), employees });
 });
 
+// Every local day overlapping [from, to) starts at most ~14h before `from` and ends at
+// most ~14h after `to`, so a two-day pad keeps whole days while letting the
+// (location_id, started_at) index narrow the scan before the per-row local-date math.
+const SCAN_PAD = 2 * 86400;
+
+/** Named params bounding a query to the local days covered by [from, to). */
+function dayWindow(zone, from, to) {
+  return {
+    scanFrom: from - SCAN_PAD, scanTo: to + SCAN_PAD,
+    fromDay: zone.dayStr(from), toDay: zone.dayStr(to - 1),
+  };
+}
+
 app.get("/admin/report", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
   const from = intParam(c, "from");
@@ -358,10 +360,10 @@ app.get("/admin/report", authed, managerOnly, async (c) => {
   const lateAfterSec = ws
     ? Number(ws.slice(0, 2)) * 3600 + Number(ws.slice(3, 5)) * 60 + graceSec
     : null;
-  // Resolve the offset at an exact second: tzOffsetSec() compares a second-truncated
-  // formatted time against a Date that still carries milliseconds, so passing a Date
-  // with a millisecond part makes it report 1 second too little (see task-3-report).
-  const off = tzOffsetSec(tz, new Date(now() * 1000));
+  // Each instant is mapped with the offset in force on its own date, so a window that
+  // spans a DST change does not shift the sessions on the far side of it by an hour.
+  const zone = localZone(tz, from - SCAN_PAD, Math.min(to, now()) + SCAN_PAD);
+  const localDate = zone.sqlLocalDate;
 
   // late_days: the spec defines lateness by the employee's FIRST session of the local
   // DAY, and counts it "only on days with attendance" (spec §5.1). Two separate scopes:
@@ -378,23 +380,24 @@ app.get("/admin/report", authed, managerOnly, async (c) => {
       `SELECT s.user_id, MIN(s.started_at) AS first_started_at
          FROM sessions s
         WHERE s.location_id = :loc
-          AND DATE(FROM_UNIXTIME(s.started_at + :off))
-              BETWEEN DATE(FROM_UNIXTIME(:from + :off)) AND DATE(FROM_UNIXTIME(:to - 1 + :off))
+          AND s.started_at >= :scanFrom AND s.started_at < :scanTo
+          AND ${localDate("s.started_at")} BETWEEN :fromDay AND :toDay
           AND EXISTS (
                 SELECT 1
                   FROM sessions p
                  WHERE p.location_id = s.location_id
                    AND p.user_id = s.user_id
-                   AND DATE(FROM_UNIXTIME(p.started_at + :off))
-                       = DATE(FROM_UNIXTIME(s.started_at + :off))
+                   AND p.started_at >= :scanFrom AND p.started_at < :scanTo
+                   AND ${localDate("p.started_at")} = ${localDate("s.started_at")}
                    AND p.started_at < :to AND (p.ended_at IS NULL OR p.ended_at > :from)
               )
-        GROUP BY s.user_id, DATE(FROM_UNIXTIME(s.started_at + :off))`,
-      { loc, off, from, to }
+        GROUP BY s.user_id, ${localDate("s.started_at")}`,
+      { loc, from, to, ...dayWindow(zone, from, to) }
     );
     for (const r of firstPerDay) {
-      const localTod = (((Number(r.first_started_at) + off) % 86400) + 86400) % 86400;
-      if (localTod > lateAfterSec) lateDaysByUser.set(r.user_id, (lateDaysByUser.get(r.user_id) ?? 0) + 1);
+      if (zone.localTod(r.first_started_at) > lateAfterSec) {
+        lateDaysByUser.set(r.user_id, (lateDaysByUser.get(r.user_id) ?? 0) + 1);
+      }
     }
   }
 
@@ -402,7 +405,7 @@ app.get("/admin/report", authed, managerOnly, async (c) => {
     `SELECT e.user_id, e.name, e.email,
             COALESCE(SUM(${WORKED_EXPR}), 0)                                 AS worked_sec,
             COUNT(s.id)                                                      AS sessions_count,
-            COUNT(DISTINCT DATE(FROM_UNIXTIME(s.started_at + :off)))         AS days_present,
+            COUNT(DISTINCT ${localDate("s.started_at")})                      AS days_present,
             COALESCE(SUM(CASE WHEN s.closed_by = 'auto' THEN 1 ELSE 0 END), 0) AS auto_closed
        FROM employees e
        LEFT JOIN sessions s
@@ -411,7 +414,7 @@ app.get("/admin/report", authed, managerOnly, async (c) => {
       WHERE e.location_id = :loc AND e.is_active = 1
       GROUP BY e.user_id, e.name, e.email
       ORDER BY worked_sec DESC`,
-    { now: now(), to, from, off, loc }
+    { now: now(), to, from, loc }
   );
 
   return c.json({
@@ -455,9 +458,8 @@ app.get("/admin/sessions", authed, managerOnly, async (c) => {
   const lateAfterSec = ws
     ? Number(ws.slice(0, 2)) * 3600 + Number(ws.slice(3, 5)) * 60 + Number(st?.late_grace_minutes ?? 15) * 60
     : null;
-  const off = tzOffsetSec(tz, new Date(now() * 1000));
-  const localDay = (ts) => Math.floor((Number(ts) + off) / 86400);
-  const localTod = (ts) => (((Number(ts) + off) % 86400) + 86400) % 86400;
+  const zone = localZone(tz, from - SCAN_PAD, Math.min(to, now()) + SCAN_PAD);
+  const localDate = zone.sqlLocalDate;
 
   let firstByUserDay = new Map();
   if (lateAfterSec !== null && sessions.length) {
@@ -465,22 +467,22 @@ app.get("/admin/sessions", authed, managerOnly, async (c) => {
       `SELECT s.user_id, MIN(s.started_at) AS first_started_at
          FROM sessions s
         WHERE s.location_id = :loc
-          AND DATE(FROM_UNIXTIME(s.started_at + :off))
-              BETWEEN DATE(FROM_UNIXTIME(:from + :off)) AND DATE(FROM_UNIXTIME(:to - 1 + :off))
+          AND s.started_at >= :scanFrom AND s.started_at < :scanTo
+          AND ${localDate("s.started_at")} BETWEEN :fromDay AND :toDay
           AND (:uid IS NULL OR s.user_id = :uid)
-        GROUP BY s.user_id, DATE(FROM_UNIXTIME(s.started_at + :off))`,
-      { loc, off, from, to, uid }
+        GROUP BY s.user_id, ${localDate("s.started_at")}`,
+      { loc, uid, ...dayWindow(zone, from, to) }
     );
     firstByUserDay = new Map(
-      rows.map((r) => [`${r.user_id}|${localDay(r.first_started_at)}`, Number(r.first_started_at)])
+      rows.map((r) => [`${r.user_id}|${zone.localDayKey(r.first_started_at)}`, Number(r.first_started_at)])
     );
   }
 
   const annotated = sessions.map((s) => {
     if (lateAfterSec === null) return { ...s, late_by_sec: null };
-    const first = firstByUserDay.get(`${s.user_id}|${localDay(s.started_at)}`);
+    const first = firstByUserDay.get(`${s.user_id}|${zone.localDayKey(s.started_at)}`);
     const isDayFirst = first !== undefined && first === Number(s.started_at);
-    const over = localTod(s.started_at) - lateAfterSec;
+    const over = zone.localTod(s.started_at) - lateAfterSec;
     return { ...s, late_by_sec: isDayFirst && over > 0 ? over : null };
   });
 
