@@ -123,3 +123,30 @@ export function fixedWindows(tz, fromTs, toTs, start, end) {
   }
   return out;
 }
+
+const dateKey = (x) => x.y * 10000 + x.m * 100 + x.d;
+
+/** UTC seconds of the first instant of a local date. DST-aware. */
+function dayStartUtc(tz, date) {
+  const s = wallToUtc(tz, date, "00:00");
+  if (dateKey(localDate(tz, s)) >= dateKey(date)) return s;
+  // Where a DST change skips midnight itself (e.g. Chile, 00:00 → 01:00), "00:00" maps to
+  // an instant still on the previous day; the day starts at the change, so bisect to it.
+  let lo = s, hi = s + 3 * 3600;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (dateKey(localDate(tz, mid)) < dateKey(date)) lo = mid; else hi = mid;
+  }
+  return hi;
+}
+
+/**
+ * UTC bounds [dayStart, nextDayStart) of the local calendar day containing `ts`.
+ * DST-aware: a spring-forward day is 23h long, a fall-back day 25h.
+ */
+export function localDayBounds(tz, ts) {
+  const d = localDate(tz, ts);
+  const n = new Date(Date.UTC(d.y, d.m - 1, d.d + 1));
+  const next = { y: n.getUTCFullYear(), m: n.getUTCMonth() + 1, d: n.getUTCDate() };
+  return [dayStartUtc(tz, d), dayStartUtc(tz, next)];
+}

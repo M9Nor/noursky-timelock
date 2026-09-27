@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tzOffsetSec, tzSegments, localZone, localDate, wallToUtc, fixedWindows } from "./tz.js";
+import { tzOffsetSec, tzSegments, localZone, localDate, wallToUtc, fixedWindows, localDayBounds } from "./tz.js";
 
 const utc = (...a) => Date.UTC(...a) / 1000;
 
@@ -91,4 +91,32 @@ test("fixedWindows follows DST across a change", () => {
     [utc(2026, 2, 28, 12), utc(2026, 2, 28, 13)], // CET
     [utc(2026, 2, 29, 11), utc(2026, 2, 29, 12)], // CEST from the 29th
   ]);
+});
+
+test("localDayBounds gives the UTC bounds of the local day containing an instant", () => {
+  // Riyadh (UTC+3): 22:30Z on the 24th is already the 25th locally.
+  assert.deepEqual(localDayBounds("Asia/Riyadh", utc(2026, 8, 24, 22, 30)),
+    [utc(2026, 8, 24, 21), utc(2026, 8, 25, 21)]);
+  // The day's first second belongs to it; its last second too; the next midnight does not.
+  assert.deepEqual(localDayBounds("Asia/Riyadh", utc(2026, 8, 24, 21)), [utc(2026, 8, 24, 21), utc(2026, 8, 25, 21)]);
+  assert.deepEqual(localDayBounds("Asia/Riyadh", utc(2026, 8, 25, 20, 59, 59)), [utc(2026, 8, 24, 21), utc(2026, 8, 25, 21)]);
+  assert.deepEqual(localDayBounds("Asia/Riyadh", utc(2026, 8, 25, 21)), [utc(2026, 8, 25, 21), utc(2026, 8, 26, 21)]);
+});
+
+test("localDayBounds: a Berlin spring-forward day is 23 hours, a fall-back day 25", () => {
+  const [s1, e1] = localDayBounds("Europe/Berlin", utc(2026, 2, 29, 12));
+  assert.deepEqual([s1, e1], [utc(2026, 2, 28, 23), utc(2026, 2, 29, 22)]); // CET midnight → CEST midnight
+  assert.equal(e1 - s1, 23 * 3600);
+  const [s2, e2] = localDayBounds("Europe/Berlin", utc(2026, 9, 25, 12));
+  assert.deepEqual([s2, e2], [utc(2026, 9, 24, 22), utc(2026, 9, 25, 23)]);
+  assert.equal(e2 - s2, 25 * 3600);
+});
+
+test("localDayBounds starts the day at the change where midnight itself is skipped", () => {
+  // Chile springs forward at 00:00 → 01:00 on 2026-09-06: that day starts at 01:00 local
+  // (-03), i.e. 04:00Z, and the previous day ends there too.
+  const [s, e] = localDayBounds("America/Santiago", utc(2026, 8, 6, 18));
+  assert.equal(s, utc(2026, 8, 6, 4));
+  assert.equal(e, utc(2026, 8, 7, 3));
+  assert.equal(localDayBounds("America/Santiago", utc(2026, 8, 6, 3, 59, 59))[1], s);
 });
