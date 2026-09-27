@@ -583,6 +583,17 @@ check("a paid fixed window deducts nothing", (await fxBreakSec(fxPaidId, fxMidni
     const fxLive = await call(FM, "GET", "/admin/live");
     check("live floor carries today's fixed window", fxLive.body?.fixed_break?.starts_at === fb?.starts_at);
 
+    // The day's recorded fixed row plus an employee break (policy switched to flexible
+    // mid-window) add up to more break than session; CSV Hours must still not go below 0.
+    await fxPolicy({ ...livePolicy, break_mode: "flexible" });
+    await call(FE, "POST", "/session/break/start");
+    await sleep(1100);
+    const over = await call(FE, "POST", "/session/stop");
+    const overCsv = await call(FM, "GET", `/admin/export.csv?from=${over.body?.started_at}&to=${over.body?.ended_at + 1}`);
+    const overCells = String(overCsv.body).split("\r\n")[1]?.match(/"(?:[^"]|"")*"/g) ?? [];
+    check("CSV Hours is clamped at 0 when recorded breaks exceed the session",
+      over.body?.break_sec > over.body?.duration_sec && overCells[4] === '"0.00"',
+      `(break ${over.body?.break_sec}, duration ${over.body?.duration_sec}, row ${JSON.stringify(overCells)})`);
   } else {
     console.log("  SKIP  live fixed-window deductions (need a local DB to backdate break_policy_since)");
   }

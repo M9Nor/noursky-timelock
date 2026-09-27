@@ -832,7 +832,7 @@ app.get("/admin/export.csv", authed, managerOnly, async (c) => {
   const lines = [
     ["Employee", "Email", "Start", "End", "Hours", "Break (min)", "Closed by", "Note"],
     ...rows.map((r) => [r.name, r.email, fmt(r.started_at), fmt(r.ended_at),
-      r.duration_sec ? ((Number(r.duration_sec) - Number(r.break_sec)) / 3600).toFixed(2) : "",
+      r.duration_sec ? (Math.max(0, Number(r.duration_sec) - Number(r.break_sec)) / 3600).toFixed(2) : "",
       breakMin(r.break_sec), r.closed_by ?? "open", r.note ?? ""]),
   ];
   const csv = "\uFEFF" + lines.map((l) => l.map(esc).join(",")).join("\r\n"); // BOM → Excel reads Arabic
