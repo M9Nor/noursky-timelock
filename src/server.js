@@ -9,7 +9,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { cors } from "hono/cors";
 import mysql from "mysql2/promise";
 import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID } from "node:crypto";
-import { localZone, localDate, wallToUtc, fixedWindows } from "./tz.js";
+import { localZone, localDate, wallToUtc, fixedWindows, localDayBounds } from "./tz.js";
 
 /* ------------------------------------------------------------------ */
 /* Config                                                              */
@@ -151,43 +151,76 @@ const NOTE_POLICIES = ["off", "optional", "required"];
 const BREAK_MODES = ["off", "fixed", "flexible"];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-/** Today's fixed break window (local date of `t`), or null when the mode isn't fixed. */
+/**
+ * Today's fixed break window (local date of `t`), or null when the mode isn't fixed or
+ * today's window began before the policy was saved (it never applies to that window).
+ */
 function todayFixedBreak(st, t) {
   if (st?.break_mode !== "fixed" || !st.break_start || !st.break_end) return null;
   const day = localDate(st.timezone, t);
+  const startsAt = wallToUtc(st.timezone, day, st.break_start);
+  if (st.break_policy_since != null && startsAt < Number(st.break_policy_since)) return null;
   return {
-    starts_at: wallToUtc(st.timezone, day, st.break_start),
+    starts_at: startsAt,
     ends_at: wallToUtc(st.timezone, day, st.break_end),
     paid: Boolean(st.break_paid),
   };
 }
 
+// Rows of kind 'fixed' on one session within one local day's UTC bounds.
+const FIXED_ON_DAY = `SELECT 1 FROM breaks
+   WHERE session_id = :sid AND kind = 'fixed' AND started_at >= :dayStart AND started_at < :dayEnd`;
+
 /**
  * Unpaid fixed windows are written as `breaks` rows (kind 'fixed') once the window has
  * begun for a session, so every worked-time query deducts them like any other break and
  * a later policy change never rewrites a recorded day. Rows hold the whole window; reads
- * clip it to the session. INSERT IGNORE on ux_fixed_window makes this idempotent.
+ * clip it to the session.
  *
- * `exec` runs the INSERT (defaults to the pool via `q`; a manager edit passes the
- * transaction's `conn.execute` so the edit and its recorded windows commit atomically).
- * `except`, when given, is the session's bounds *before* the edit — a window that already
- * overlapped them was recordable under the old bounds too, so it is skipped here rather
- * than re-recorded under whatever policy happens to be live today.
+ * At most ONE fixed row per session per local day: the first window recorded wins, so a
+ * manager who moves the window on a day that already has one recorded never gets the day
+ * deducted twice. The INSERT … SELECT … WHERE NOT EXISTS enforces that in SQL, so it holds
+ * for concurrent recorders too; INSERT IGNORE on ux_fixed_window keeps it idempotent.
+ * A window that began before the policy was saved (`break_policy_since`) is never
+ * recorded: a policy applies from the moment it is saved, not to earlier windows.
+ *
+ * `exec(sql, params) → rows` runs the SQL (defaults to the pool via `q`; a manager edit
+ * passes the transaction's connection so the edit and its recorded windows commit
+ * atomically). `except`, when given, is the session's bounds *before* the edit — a window
+ * that already overlapped them was recordable under the old bounds too, so it is skipped
+ * here rather than re-recorded under whatever policy happens to be live today.
  */
 async function recordFixedBreaks(session, st, t, { exec = q, except = null } = {}) {
   if (st?.break_mode !== "fixed" || st.break_paid || !st.break_start || !st.break_end) return;
+  const since = st.break_policy_since == null ? null : Number(st.break_policy_since);
   const start = Number(session.started_at);
   const until = session.ended_at == null ? t : Math.min(Number(session.ended_at), t);
   const exStart = except ? Number(except.started_at) : null;
   const exEnd = except ? (except.ended_at == null ? t : Number(except.ended_at)) : null;
   for (const [ws, we] of fixedWindows(st.timezone, start, until, st.break_start, st.break_end)) {
     if (ws > t || we <= start || ws >= until) continue;
+    if (since !== null && ws < since) continue; // began before this policy was saved
     if (except && ws < exEnd && we > exStart) continue; // already coverable under the old bounds
-    await exec(
+    const [dayStart, dayEnd] = localDayBounds(st.timezone, ws);
+    const day = { sid: session.id, dayStart, dayEnd };
+    // Non-locking check first: once the day's row exists (the steady state on every
+    // request) the locking INSERT below is skipped entirely.
+    if ((await exec(`${FIXED_ON_DAY} LIMIT 1`, day)).length) continue;
+    const insert = () => exec(
       `INSERT IGNORE INTO breaks (id, session_id, location_id, kind, started_at, ended_at)
-       VALUES (:id, :sid, :loc, 'fixed', :ws, :we)`,
-      { id: randomUUID(), sid: session.id, loc: session.location_id, ws, we }
+       SELECT :id, :sid, :loc, 'fixed', :ws, :we FROM DUAL
+        WHERE NOT EXISTS (${FIXED_ON_DAY})`,
+      { ...day, id: randomUUID(), loc: session.location_id, ws, we }
     );
+    try {
+      await insert();
+    } catch (e) {
+      // Two autocommit recorders racing on the same still-empty day can deadlock on the
+      // NOT EXISTS gap locks; InnoDB rolls one back, and its retry then sees the winner's
+      // row and inserts nothing. Inside a transaction the caller's rollback handles it.
+      if (e.code !== "ER_LOCK_DEADLOCK" || exec !== q) throw e;
+      await insert();
+    }
   }
 }
 
@@ -196,7 +229,8 @@ async function recordOpenFixedBreaks(loc = null) {
   const t = now();
   const open = await q(
     `SELECT s.id, s.location_id, s.started_at, s.ended_at,
-            st.timezone, st.break_mode, st.break_start, st.break_end, st.break_paid
+            st.timezone, st.break_mode, st.break_start, st.break_end, st.break_paid,
+            st.break_policy_since
        FROM sessions s
        JOIN settings st ON st.location_id = s.location_id
       WHERE s.ended_at IS NULL AND st.break_mode = 'fixed' AND st.break_paid = 0
@@ -334,13 +368,27 @@ app.get("/me/status", authed, async (c) => {
         AND s.started_at < :to AND (s.ended_at IS NULL OR s.ended_at > :from)`,
     { now: t, to: t, from, uid, loc }
   );
+  const st = await getSettings(loc);
+  let fixedBreak = todayFixedBreak(st, t);
+  if (open.length && st) {
+    // The window actually deducted today is the one recorded first (one per day), which
+    // differs from today's policy window when the manager moved it after it was recorded.
+    const [dayStart, dayEnd] = localDayBounds(st.timezone, t);
+    const [rec] = await q(
+      `SELECT started_at, ended_at FROM breaks
+        WHERE session_id = :sid AND kind = 'fixed' AND started_at >= :dayStart AND started_at < :dayEnd
+        ORDER BY started_at LIMIT 1`,
+      { sid: open[0].id, dayStart, dayEnd }
+    );
+    if (rec) fixedBreak = { starts_at: Number(rec.started_at), ends_at: Number(rec.ended_at), paid: false };
+  }
   return c.json({
     open_session: open[0]
       ? { id: open[0].id, started_at: Number(open[0].started_at), break_sec: Number(open[0].break_sec) }
       : null,
     open_break: brk[0] ? { id: brk[0].id, started_at: Number(brk[0].started_at) } : null,
     worked_sec: Number(total[0].worked_sec),
-    fixed_break: todayFixedBreak(await getSettings(loc), t),
+    fixed_break: fixedBreak,
     server_time: t,
   });
 });
@@ -730,7 +778,10 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
     // that, atomically with the edit — never a window already coverable before the edit.
     await recordFixedBreaks(
       { id, location_id: loc, started_at: s, ended_at: e }, st, now(),
-      { exec: (sql, p) => conn.execute(sql, p), except: { started_at: old.started_at, ended_at: old.ended_at } }
+      {
+        exec: async (sql, p) => (await conn.execute(sql, p))[0],
+        except: { started_at: old.started_at, ended_at: old.ended_at },
+      }
     );
     await conn.commit();
     return c.json({ id, started_at: s, ended_at: e, duration_sec: e - s, closed_by: "admin" });
@@ -794,6 +845,9 @@ app.get("/admin/settings", authed, managerOnly, async (c) => {
 
 app.put("/admin/settings", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
+  // Windows that already began under the CURRENT policy are recorded before it changes;
+  // otherwise saving a new policy would silently drop them.
+  await recordOpenFixedBreaks(loc);
   const b = (await c.req.json().catch(() => null)) ?? {};
   try { new Intl.DateTimeFormat("en", { timeZone: b.timezone }); } catch { throw new HttpError(400, "INVALID_TIMEZONE"); }
   if (!b.timezone) throw new HttpError(400, "INVALID_TIMEZONE");
@@ -825,8 +879,15 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   const notePolicy = b.note_on_stop === undefined ? "off" : b.note_on_stop;
   if (!NOTE_POLICIES.includes(notePolicy)) throw new HttpError(400, "INVALID_NOTE_POLICY");
 
+  // break_policy_since moves to now only when the break policy itself changes. It is
+  // assigned FIRST so it compares against the stored values: MySQL evaluates single-table
+  // SET assignments left to right (MariaDB may use the old values throughout) — both see
+  // the old break_* columns here. One statement, so no read-then-write race.
   await q(
-    `UPDATE settings SET timezone = :tz, daily_target_hours = :target, work_start = :ws,
+    `UPDATE settings SET break_policy_since = IF(break_mode <=> :breakMode AND break_start <=> :breakStart
+                                                  AND break_end <=> :breakEnd AND break_paid <=> :breakPaid,
+                                                  break_policy_since, :t),
+                         timezone = :tz, daily_target_hours = :target, work_start = :ws,
                          late_grace_minutes = :grace, max_session_hours = :max,
                          breaks_enabled = :breaksEnabled, break_mode = :breakMode,
                          break_start = :breakStart, break_end = :breakEnd, break_paid = :breakPaid,

@@ -11,6 +11,10 @@ ALTER TABLE settings
   ADD COLUMN break_end CHAR(5) NULL AFTER break_start;
 ALTER TABLE settings
   ADD COLUMN break_paid TINYINT(1) NOT NULL DEFAULT 0 AFTER break_end;
+-- When the break policy was last changed (UNIX s). Fixed windows that began before it are
+-- never recorded; NULL = no restriction.
+ALTER TABLE settings
+  ADD COLUMN break_policy_since BIGINT NULL AFTER break_paid;
 -- Accounts that already switched breaks on keep the button they have today.
 UPDATE settings SET break_mode = 'flexible' WHERE breaks_enabled = 1;
 

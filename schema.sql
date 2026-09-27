@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS settings (
   break_start        CHAR(5)      NULL,
   break_end          CHAR(5)      NULL,
   break_paid         TINYINT(1)   NOT NULL DEFAULT 0,
+  -- When the break policy last changed; fixed windows that began earlier are never recorded.
+  break_policy_since BIGINT       NULL,
   max_session_hours  DECIMAL(4,2) NOT NULL DEFAULT 12,
   updated_at         BIGINT       NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

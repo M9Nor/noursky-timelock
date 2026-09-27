@@ -58,19 +58,15 @@ function readDotEnv() {
 }
 
 /**
- * Best-effort removal of one fixture location's rows, so test data does not accumulate.
- * Only attempted against a LOCAL dev database and only when DB credentials are present
- * in the environment (e.g. `node --env-file=.env scripts/smoke-test.mjs`); a run against
- * a remote host skips it and never issues a DELETE there.
+ * Runs `fn(conn)` against the LOCAL dev database only, and only when DB credentials are
+ * present in the environment or ./.env (e.g. `node --env-file=.env scripts/smoke-test.mjs`).
+ * A run against a remote host never touches its database: returns `{ skipped: reason }`.
  */
-async function cleanupLocation(loc) {
+async function withLocalDb(fn) {
   const cfg = { ...readDotEnv(), ...process.env };
   const host = cfg.DB_HOST || "localhost";
   const isLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
-  if (!isLocal || !cfg.DB_NAME || !cfg.DB_USER) {
-    console.log(`  (cleanup of ${loc} skipped: no local DB credentials)`);
-    return;
-  }
+  if (!isLocal || !cfg.DB_NAME || !cfg.DB_USER) return { skipped: "no local DB credentials" };
   let conn;
   try {
     const mysql = (await import("mysql2/promise")).default;
@@ -82,15 +78,33 @@ async function cleanupLocation(loc) {
       database: cfg.DB_NAME,
       namedPlaceholders: true,
     });
-    for (const table of ["breaks", "edits_log", "sessions", "employees", "settings"]) {
-      await conn.execute(`DELETE FROM ${table} WHERE location_id = :loc`, { loc });
-    }
-    console.log(`  (cleaned up fixture location ${loc})`);
+    await fn(conn);
+    return { skipped: null };
   } catch (e) {
-    console.log(`  (cleanup of ${loc} skipped: ${e.code || e.message})`);
+    return { skipped: e.code || e.message };
   } finally {
     await conn?.end().catch(() => {});
   }
+}
+
+/** Best-effort removal of one fixture location's rows, so test data does not accumulate. */
+async function cleanupLocation(loc) {
+  const { skipped } = await withLocalDb(async (conn) => {
+    for (const table of ["breaks", "edits_log", "sessions", "employees", "settings"]) {
+      await conn.execute(`DELETE FROM ${table} WHERE location_id = :loc`, { loc });
+    }
+  });
+  console.log(skipped ? `  (cleanup of ${loc} skipped: ${skipped})` : `  (cleaned up fixture location ${loc})`);
+}
+
+/**
+ * Backdates a fixture location's break_policy_since, as if its current break policy had
+ * been saved at `ts` — the API always stamps "now". Local dev DB only; false elsewhere.
+ */
+async function setPolicySince(loc, ts) {
+  const { skipped } = await withLocalDb((conn) =>
+    conn.execute("UPDATE settings SET break_policy_since = :ts WHERE location_id = :loc", { ts, loc }));
+  return !skipped;
 }
 
 console.log(`Smoke test → ${BASE} (location ${LOC})`);
@@ -441,98 +455,155 @@ check("the break button is refused in fixed mode",
   (await call(FE, "POST", "/session/break/start")).body?.error === "BREAKS_DISABLED");
 await call(FE, "POST", "/session/stop");
 
-// Unpaid fixed window: recorded as a break when a manager edit puts a session over it.
+// Unpaid fixed window: recorded as a break when a manager edit puts a session over it —
+// but only for windows that began after the policy was saved (break_policy_since). Checks
+// that need an OLDER policy backdate break_policy_since through the local dev DB, and are
+// skipped (with a SKIP line) when the smoke test runs against anything else.
 // Riyadh is UTC+3 with no DST; fxMidnight is 00:00 local "yesterday" as UTC seconds.
 const fxMidnight = Math.floor((t + 3 * 3600) / 86400) * 86400 - 86400 - 3 * 3600;
+const fxPatch = (id, dayStart, fromH, toH, reason = "نافذة استراحة للاختبار") => call(FM, "PATCH", `/admin/sessions/${id}`,
+  { started_at: dayStart + fromH * 3600, ended_at: dayStart + toH * 3600, reason });
 async function fxSessionAt(dayStart) {
   const open = await call(FE, "POST", "/session/start");
   await call(FE, "POST", "/session/stop");
-  await call(FM, "PATCH", `/admin/sessions/${open.body?.id}`,
-    { started_at: dayStart + 9 * 3600, ended_at: dayStart + 17 * 3600, reason: "نافذة استراحة للاختبار" });
+  await fxPatch(open.body?.id, dayStart, 9, 17);
   return open.body?.id;
+}
+async function fxBreakSec(id, dayStart) {
+  const r = await call(FM, "GET", `/admin/sessions?from=${dayStart}&to=${dayStart + 86400}&user_id=${FXLOC}-u1`);
+  return r.body?.sessions?.find((x) => x.id === id)?.break_sec;
 }
 await fxPolicy({ break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: false });
 const fxUnpaidId = await fxSessionAt(fxMidnight);
-const fxRange = `from=${fxMidnight + 9 * 3600}&to=${fxMidnight + 17 * 3600}`;
-const fxRows = await call(FM, "GET", `/admin/sessions?${fxRange}&user_id=${FXLOC}-u1`);
-check("an unpaid fixed window is deducted from a session that covers it",
-  fxRows.body?.sessions?.find((x) => x.id === fxUnpaidId)?.break_sec === 3600,
-  `(${JSON.stringify(fxRows.body?.sessions?.map((x) => x.break_sec))})`);
-const fxReport = await call(FM, "GET", `/admin/report?${fxRange}`);
-check("report worked time excludes the unpaid window",
-  fxReport.body?.employees?.find((e) => e.user_id === `${FXLOC}-u1`)?.worked_sec === 7 * 3600,
-  `(${JSON.stringify(fxReport.body?.employees?.find((e) => e.user_id === `${FXLOC}-u1`))})`);
-await fxPolicy({ break_mode: "off" });
-const fxAfterOff = await call(FM, "GET", `/admin/sessions?${fxRange}&user_id=${FXLOC}-u1`);
-check("switching the policy off does not rewrite a recorded day",
-  fxAfterOff.body?.sessions?.find((x) => x.id === fxUnpaidId)?.break_sec === 3600);
+check("a policy saved now does not reach back: an edit covering yesterday's window records nothing",
+  (await fxBreakSec(fxUnpaidId, fxMidnight)) === 0, `(${await fxBreakSec(fxUnpaidId, fxMidnight)})`);
+
+const fxOlder = await setPolicySince(FXLOC, fxMidnight - 5 * 86400);
+if (fxOlder) {
+  // Newly cover the window again (the previous bounds already covered it, so a same-bounds
+  // edit would be skipped): shrink below 13:00, then extend back to 17:00.
+  await fxPatch(fxUnpaidId, fxMidnight, 9, 12);
+  await fxPatch(fxUnpaidId, fxMidnight, 9, 17);
+  check("an unpaid fixed window is deducted from a session that covers it",
+    (await fxBreakSec(fxUnpaidId, fxMidnight)) === 3600, `(${await fxBreakSec(fxUnpaidId, fxMidnight)})`);
+  const fxRange = `from=${fxMidnight + 9 * 3600}&to=${fxMidnight + 17 * 3600}`;
+  const fxReport = await call(FM, "GET", `/admin/report?${fxRange}`);
+  check("report worked time excludes the unpaid window",
+    fxReport.body?.employees?.find((e) => e.user_id === `${FXLOC}-u1`)?.worked_sec === 7 * 3600,
+    `(${JSON.stringify(fxReport.body?.employees?.find((e) => e.user_id === `${FXLOC}-u1`))})`);
+
+  // Moving the window on a day that already has one recorded must not deduct twice: at most
+  // one fixed row per session per local day. The edits newly cover 15:00–16:00 (09:00–14:30
+  // does not reach it), so the recorder does try the new window — and the day's row wins.
+  await fxPolicy({ break_mode: "fixed", break_start: "15:00", break_end: "16:00", break_paid: false });
+  await setPolicySince(FXLOC, fxMidnight);
+  await fxPatch(fxUnpaidId, fxMidnight, 9, 14.5);
+  await fxPatch(fxUnpaidId, fxMidnight, 9, 17);
+  check("a moved window on an already-recorded day is not deducted a second time",
+    (await fxBreakSec(fxUnpaidId, fxMidnight)) === 3600, `(${await fxBreakSec(fxUnpaidId, fxMidnight)})`);
+  // Control: the same edits on a day with nothing recorded do record the new window.
+  const fxCtlDay = fxMidnight - 4 * 86400;
+  await setPolicySince(FXLOC, fxCtlDay);
+  const fxCtlOpen = await call(FE, "POST", "/session/start");
+  await call(FE, "POST", "/session/stop");
+  await fxPatch(fxCtlOpen.body?.id, fxCtlDay, 9, 14.5);
+  await fxPatch(fxCtlOpen.body?.id, fxCtlDay, 9, 17);
+  check("…while the same edits on a day with nothing recorded record the new window",
+    (await fxBreakSec(fxCtlOpen.body?.id, fxCtlDay)) === 3600, `(${await fxBreakSec(fxCtlOpen.body?.id, fxCtlDay)})`);
+
+  await fxPolicy({ break_mode: "off" });
+  check("switching the policy off does not rewrite a recorded day",
+    (await fxBreakSec(fxUnpaidId, fxMidnight)) === 3600);
+} else {
+  console.log("  SKIP  past-day fixed-window deductions (need a local DB to backdate break_policy_since)");
+}
 
 // A paid window deducts nothing.
 await fxPolicy({ break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: true });
+await setPolicySince(FXLOC, fxMidnight - 5 * 86400);
 const fxPaidId = await fxSessionAt(fxMidnight - 86400);
-const fxPaidRows = await call(FM, "GET",
-  `/admin/sessions?from=${fxMidnight - 86400 + 9 * 3600}&to=${fxMidnight - 86400 + 17 * 3600}&user_id=${FXLOC}-u1`);
-check("a paid fixed window deducts nothing",
-  fxPaidRows.body?.sessions?.find((x) => x.id === fxPaidId)?.break_sec === 0);
+check("a paid fixed window deducts nothing", (await fxBreakSec(fxPaidId, fxMidnight - 86400)) === 0);
 
-// Live: a window that is running now. Needs a same-day window around the current local
-// time, so it is skipped in the last hour before local midnight.
-const fxNowLocal = (t + 3 * 3600) % 86400;
-if (fxNowLocal >= 120 && fxNowLocal < 23 * 3600) {
+// Live: a window running now. Run in a fixed-offset zone where it is about noon, so the
+// window never straddles local midnight and these checks never skip.
+{
+  const nowS = Math.floor(Date.now() / 1000);
+  let h = Math.round((12 * 3600 - (nowS % 86400)) / 3600);
+  if (h > 14) h -= 24;
+  if (h < -12) h += 24;
+  const liveTz = h === 0 ? "UTC" : `Etc/GMT${h > 0 ? "-" : "+"}${Math.abs(h)}`; // Etc/GMT-3 = UTC+3
+  const nowLocal = (((nowS + h * 3600) % 86400) + 86400) % 86400;
   const hhmm = (sec) => `${String(Math.floor(sec / 3600)).padStart(2, "0")}:${String(Math.floor(sec % 3600 / 60)).padStart(2, "0")}`;
-  const winStart = Math.floor(fxNowLocal / 60) * 60 - 60;
-  await fxPolicy({ break_mode: "fixed", break_start: hhmm(winStart), break_end: hhmm(winStart + 3600), break_paid: false });
-  const liveOpen = await call(FE, "POST", "/session/start");
+  const winStart = Math.floor(nowLocal / 60) * 60 - 60;
+  const livePolicy = { timezone: liveTz, break_mode: "fixed", break_start: hhmm(winStart), break_end: hhmm(winStart + 3600), break_paid: false };
+  const winStartUtc = nowS - (nowLocal - winStart);
+
+  // Saved one minute into the window: that window began before the policy existed.
+  await fxPolicy(livePolicy);
+  await call(FE, "POST", "/session/start");
   await sleep(2100);
-  const liveStatus = await call(FE, "GET", "/me/status");
-  const fb = liveStatus.body?.fixed_break;
-  check("status reports today's fixed window",
-    fb?.paid === false && fb.starts_at <= liveStatus.body.server_time && liveStatus.body.server_time < fb.ends_at,
-    `(${JSON.stringify(fb)})`);
-  check("a running unpaid window counts as break time on the open session",
-    liveStatus.body?.open_session?.break_sec >= 2, `(${JSON.stringify(liveStatus.body?.open_session)})`);
-  const fxLive = await call(FM, "GET", "/admin/live");
-  check("live floor carries today's fixed window", fxLive.body?.fixed_break?.starts_at === fb?.starts_at);
-  const liveStop = await call(FE, "POST", "/session/stop");
-  check("stop clips a window that runs past it",
-    liveStop.status === 200 && liveStop.body?.break_sec === liveStop.body?.duration_sec,
-    `(break ${liveStop.body?.break_sec}, duration ${liveStop.body?.duration_sec}, session ${liveOpen.body?.id})`);
-} else {
-  console.log("  SKIP  live fixed-window checks (too close to local midnight)");
+  const late = await call(FE, "GET", "/me/status");
+  check("a window already running when the policy is saved is not deducted",
+    late.body?.fixed_break === null && late.body?.open_session?.break_sec === 0, `(${JSON.stringify(late.body)})`);
+  if (await setPolicySince(FXLOC, winStartUtc - 60)) {
+    // Changing the policy records windows that began under the old one first. Nothing
+    // else runs the recorder between the backdate and this save.
+    await fxPolicy({ ...livePolicy, break_mode: "off" });
+    const kept = await call(FE, "GET", "/me/status");
+    check("saving a new policy first records the window already running under the old one",
+      kept.body?.open_session?.break_sec >= 2 && kept.body?.fixed_break?.starts_at === winStartUtc,
+      `(${JSON.stringify(kept.body)})`);
+    const liveStop = await call(FE, "POST", "/session/stop");
+    check("stop clips a window that runs past it",
+      liveStop.status === 200 && liveStop.body?.break_sec === liveStop.body?.duration_sec,
+      `(break ${liveStop.body?.break_sec}, duration ${liveStop.body?.duration_sec})`);
+
+    await fxPolicy(livePolicy);
+    await setPolicySince(FXLOC, winStartUtc - 60);
+    await call(FE, "POST", "/session/start");
+    await sleep(2100);
+    const liveStatus = await call(FE, "GET", "/me/status");
+    const fb = liveStatus.body?.fixed_break;
+    check("status reports today's fixed window",
+      fb?.paid === false && fb.starts_at <= liveStatus.body.server_time && liveStatus.body.server_time < fb.ends_at,
+      `(${JSON.stringify(fb)})`);
+    check("a running unpaid window counts as break time on the open session",
+      liveStatus.body?.open_session?.break_sec >= 2, `(${JSON.stringify(liveStatus.body?.open_session)})`);
+    const fxLive = await call(FM, "GET", "/admin/live");
+    check("live floor carries today's fixed window", fxLive.body?.fixed_break?.starts_at === fb?.starts_at);
+
+  } else {
+    console.log("  SKIP  live fixed-window deductions (need a local DB to backdate break_policy_since)");
+  }
+  await call(FE, "POST", "/session/stop");
+  await fxPolicy({ break_mode: "off" });
 }
 
 // A manager edit records only windows the NEW bounds newly cover, not ones already
 // coverable under the old bounds — a later-added fixed policy must not silently rewrite
 // a day a prior edit already fixed up under a different (e.g. off) policy.
-await fxPolicy({ break_mode: "off" });
 const fxOldOpen = await call(FE, "POST", "/session/start");
 await call(FE, "POST", "/session/stop");
 const fxOldId = fxOldOpen.body?.id;
 const fxOldDay = fxMidnight - 2 * 86400;
-await call(FM, "PATCH", `/admin/sessions/${fxOldId}`,
-  { started_at: fxOldDay + 9 * 3600, ended_at: fxOldDay + 17 * 3600, reason: "تعديل قبل تفعيل النافذة" });
+await fxPatch(fxOldId, fxOldDay, 9, 17, "تعديل قبل تفعيل النافذة");
 await fxPolicy({ break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: false });
-await call(FM, "PATCH", `/admin/sessions/${fxOldId}`,
-  { started_at: fxOldDay + 9 * 3600, ended_at: fxOldDay + 17 * 3600 + 5 * 60, reason: "تصحيح بسيط لوقت الانتهاء" });
-const fxOldRange = `from=${fxOldDay + 9 * 3600}&to=${fxOldDay + 17 * 3600 + 5 * 60}`;
-const fxOldRows = await call(FM, "GET", `/admin/sessions?${fxOldRange}&user_id=${FXLOC}-u1`);
-check("an edit that already covered a window under the old policy does not re-record it",
-  fxOldRows.body?.sessions?.find((x) => x.id === fxOldId)?.break_sec === 0,
-  `(${JSON.stringify(fxOldRows.body?.sessions?.map((x) => x.break_sec))})`);
+if (await setPolicySince(FXLOC, fxMidnight - 5 * 86400)) {
+  await fxPatch(fxOldId, fxOldDay, 9, 17 + 5 / 60, "تصحيح بسيط لوقت الانتهاء");
+  check("an edit that already covered a window under the old policy does not re-record it",
+    (await fxBreakSec(fxOldId, fxOldDay)) === 0, `(${await fxBreakSec(fxOldId, fxOldDay)})`);
 
-const fxNewOpen = await call(FE, "POST", "/session/start");
-await call(FE, "POST", "/session/stop");
-const fxNewId = fxNewOpen.body?.id;
-const fxNewDay = fxMidnight - 3 * 86400;
-await call(FM, "PATCH", `/admin/sessions/${fxNewId}`,
-  { started_at: fxNewDay + 9 * 3600, ended_at: fxNewDay + 12 * 3600, reason: "جلسة صباحية لا تغطي النافذة" });
-await call(FM, "PATCH", `/admin/sessions/${fxNewId}`,
-  { started_at: fxNewDay + 9 * 3600, ended_at: fxNewDay + 17 * 3600, reason: "تمديد الجلسة ليغطي النافذة" });
-const fxNewRange = `from=${fxNewDay + 9 * 3600}&to=${fxNewDay + 17 * 3600}`;
-const fxNewRows = await call(FM, "GET", `/admin/sessions?${fxNewRange}&user_id=${FXLOC}-u1`);
-check("an edit that newly covers a window records it",
-  fxNewRows.body?.sessions?.find((x) => x.id === fxNewId)?.break_sec === 3600,
-  `(${JSON.stringify(fxNewRows.body?.sessions?.map((x) => x.break_sec))})`);
+  const fxNewOpen = await call(FE, "POST", "/session/start");
+  await call(FE, "POST", "/session/stop");
+  const fxNewId = fxNewOpen.body?.id;
+  const fxNewDay = fxMidnight - 3 * 86400;
+  await fxPatch(fxNewId, fxNewDay, 9, 12, "جلسة صباحية لا تغطي النافذة");
+  await fxPatch(fxNewId, fxNewDay, 9, 17, "تمديد الجلسة ليغطي النافذة");
+  check("an edit that newly covers a window records it",
+    (await fxBreakSec(fxNewId, fxNewDay)) === 3600, `(${await fxBreakSec(fxNewId, fxNewDay)})`);
+} else {
+  console.log("  SKIP  edit-coverage fixed-window checks (need a local DB to backdate break_policy_since)");
+}
 
 await cleanupLocation(FXLOC);
 
