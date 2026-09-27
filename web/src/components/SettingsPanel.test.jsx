@@ -38,24 +38,52 @@ describe("SettingsPanel", () => {
     expect(api.put.mock.calls[0][1].late_grace_minutes).toBe(15);
   });
 
-  it("shows the saved break and note policies", async () => {
+  const BASE = { timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15, note_on_stop: "off" };
+
+  it("shows a saved fixed break with its window and pay", async () => {
     const api = {
-      get: vi.fn(async () => ({ timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15, breaks_enabled: true, note_on_stop: "required" })),
+      get: vi.fn(async () => ({ ...BASE, note_on_stop: "required", break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: true })),
       put: vi.fn(),
     };
     wrap(<SettingsPanel api={api} />);
-    expect(await screen.findByLabelText("تفعيل الاستراحات")).toBeChecked();
+    expect(await screen.findByLabelText("نوع الاستراحة")).toHaveValue("fixed");
+    expect(screen.getByLabelText("بداية الاستراحة (HH:MM)")).toHaveValue("13:00");
+    expect(screen.getByLabelText("نهاية الاستراحة (HH:MM)")).toHaveValue("14:00");
+    expect(screen.getByLabelText("استراحة مدفوعة (تنحسب من الدوام)")).toBeChecked();
     expect(screen.getByLabelText("ملاحظة عند إنهاء الدوام")).toHaveValue("required");
   });
 
-  it("saves the break and note policies", async () => {
-    const saved = { timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15, breaks_enabled: false, note_on_stop: "off" };
+  it("hides the window fields unless the mode is fixed", async () => {
+    const api = { get: vi.fn(async () => ({ ...BASE, break_mode: "flexible", break_start: null, break_end: null, break_paid: false })), put: vi.fn() };
+    wrap(<SettingsPanel api={api} />);
+    expect(await screen.findByLabelText("نوع الاستراحة")).toHaveValue("flexible");
+    expect(screen.queryByLabelText("بداية الاستراحة (HH:MM)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("استراحة مدفوعة (تنحسب من الدوام)")).not.toBeInTheDocument();
+  });
+
+  it("saves a fixed unpaid window and the note policy", async () => {
+    const saved = { ...BASE, break_mode: "off", break_start: null, break_end: null, break_paid: false };
     const api = { get: vi.fn(async () => saved), put: vi.fn(async (_p, body) => ({ ...saved, ...body })) };
     wrap(<SettingsPanel api={api} />);
-    fireEvent.click(await screen.findByLabelText("تفعيل الاستراحات"));
+    fireEvent.change(await screen.findByLabelText("نوع الاستراحة"), { target: { value: "fixed" } });
+    fireEvent.change(screen.getByLabelText("بداية الاستراحة (HH:MM)"), { target: { value: "13:00" } });
+    fireEvent.change(screen.getByLabelText("نهاية الاستراحة (HH:MM)"), { target: { value: "14:00" } });
     fireEvent.change(screen.getByLabelText("ملاحظة عند إنهاء الدوام"), { target: { value: "optional" } });
     fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
     await waitFor(() => expect(api.put).toHaveBeenCalled());
-    expect(api.put.mock.calls[0][1]).toEqual(expect.objectContaining({ breaks_enabled: true, note_on_stop: "optional" }));
+    expect(api.put.mock.calls[0][1]).toEqual(expect.objectContaining({
+      break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: false, note_on_stop: "optional",
+    }));
+    expect(api.put.mock.calls[0][1]).not.toHaveProperty("breaks_enabled");
+  });
+
+  it("explains an invalid break window", async () => {
+    const api = {
+      get: vi.fn(async () => ({ ...BASE, break_mode: "fixed", break_start: "14:00", break_end: "13:00", break_paid: false })),
+      put: vi.fn(async () => { throw Object.assign(new Error("x"), { code: "INVALID_BREAK_WINDOW" }); }),
+    };
+    wrap(<SettingsPanel api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
+    expect(await screen.findByText("وقت الاستراحة غير صحيح (البداية لازم تكون قبل النهاية)")).toBeInTheDocument();
   });
 });
