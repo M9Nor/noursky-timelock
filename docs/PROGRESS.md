@@ -18,8 +18,8 @@ _(overwrite each update)_
   location timezone. Verified live inside GHL (Innova): the 3 late days match the
   count. 54/54 frontend tests, 38/38 smoke checks locally.
 - **Not done / known minors:** see Next Steps (tzOffsetSec 1-second bug, DST offset
-  snapshot, `MyHistory` still renders in browser timezone, no committed migration
-  file). Production still holds `smoke-%` / `dev-local` test rows.
+  snapshot, no committed migration file). "سجلّي" now renders in the company timezone
+  (`893196e`), and the production `smoke-%` / `dev-local` test rows were removed.
 
 ## In Progress
 - Nothing mid-flight. The frontend redesign (spec `docs/superpowers/specs/2026-09-19-frontend-redesign-design.md`,
@@ -74,6 +74,14 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-09-27** · (1) "سجلّي" rendered times with the device clock; `GET /me/sessions`
+  now returns the location `timezone` and `MyHistory` formats with `formatStamp`
+  (new `{ year: false }` compact form). The ReportPanel timezone test used
+  Asia/Riyadh — identical to the UTC+3 dev machine, so it proved nothing; both
+  timezone tests now use America/New_York. 56/56 frontend, 39/39 smoke · `893196e`,
+  verified live. (2) Production DB cleanup, run by the user in phpMyAdmin after a
+  read-only inventory: deleted only `location_id LIKE 'smoke-%' OR = 'dev-local'` —
+  edits_log 1, sessions 5, employees 4, settings 2 (12 rows, exactly the inventory).
 - **2026-09-27** · Manager can now audit lateness per session: `GET /admin/sessions`
   returns `late_by_sec` (non-null only for the local day's first session past
   `work_start + grace`, with the day's first resolved over the whole local day, not the
