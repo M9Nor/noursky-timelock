@@ -35,6 +35,17 @@ describe("StopNoteDialog", () => {
     expect(onCancel).toHaveBeenCalled();
   });
 
+  it("shows an external error (e.g. a failed stop) in the same error span", () => {
+    render(<StopNoteDialog required={false} error="حدث خطأ، حاول مرة أخرى" onConfirm={() => {}} onCancel={() => {}} />);
+    expect(screen.getByText("حدث خطأ، حاول مرة أخرى")).toBeInTheDocument();
+  });
+
+  it("disables the Cancel button while loading", () => {
+    const onCancel = vi.fn();
+    render(<StopNoteDialog required={false} loading onConfirm={() => {}} onCancel={onCancel} />);
+    expect(screen.getByRole("button", { name: "إلغاء" })).toBeDisabled();
+  });
+
   it("links the required-note error to the textarea via aria-describedby", () => {
     render(<StopNoteDialog required onConfirm={() => {}} onCancel={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "تأكيد الإنهاء" }));

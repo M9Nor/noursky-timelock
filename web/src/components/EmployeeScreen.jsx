@@ -6,11 +6,20 @@ import { formatClock, formatHours, serverOffset, nowWithOffset } from "../time.j
 import MyHistory from "./MyHistory.jsx";
 import StopNoteDialog from "./StopNoteDialog.jsx";
 
+const GENERIC_ERROR = "حدث خطأ، حاول مرة أخرى";
+// Specific, actionable messages for error codes the employee can act on directly,
+// instead of the generic banner. Any other code falls back to GENERIC_ERROR.
+const ERROR_MESSAGES = {
+  BREAKS_DISABLED: "الاستراحات غير مفعّلة",
+  NO_OPEN_BREAK: "لا توجد استراحة مفتوحة",
+};
+
 export default function EmployeeScreen({ api, user }) {
   const [status, setStatus] = useState(null);
   const [weekSec, setWeekSec] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [noteError, setNoteError] = useState("");
   const [, setTick] = useState(0);
   const [targetSec, setTargetSec] = useState(8 * 3600);
   const [policy, setPolicy] = useState({ breaks_enabled: false, note_on_stop: "off" });
@@ -27,7 +36,7 @@ export default function EmployeeScreen({ api, user }) {
     setWeekSec(wk.worked_sec);
   }
 
-  useEffect(() => { refresh().catch((e) => setError(e.code || "INTERNAL_ERROR")); }, []);
+  useEffect(() => { refresh().catch(() => setError(GENERIC_ERROR)); }, []);
 
   useEffect(() => {
     (async () => {
@@ -47,8 +56,11 @@ export default function EmployeeScreen({ api, user }) {
     return () => clearInterval(id);
   }, []);
 
-  async function run(action, message) {
-    setLoading(true); setError("");
+  // `dialog: true` routes errors into the note dialog's own `.err` span (via noteError)
+  // instead of the page banner behind it, since the dialog overlay hides the banner.
+  async function run(action, message, { dialog = false } = {}) {
+    setLoading(true);
+    if (dialog) setNoteError(""); else setError("");
     try {
       await action();
       await refresh();
@@ -61,7 +73,23 @@ export default function EmployeeScreen({ api, user }) {
         setAskNote(true);
         return false;
       }
-      setError(e.code || "INTERNAL_ERROR");
+      if (e.code === "NO_OPEN_SESSION") {
+        // The session is already gone (auto-closed overnight, stopped from another tab,
+        // etc). Nothing to confirm anymore — close the dialog if open and resync the
+        // screen with the server instead of leaving it stuck showing "clocked in".
+        setAskNote(false);
+        setNoteError("");
+        await refresh().catch(() => {});
+        return false;
+      }
+      const mapped = ERROR_MESSAGES[e.code];
+      if (mapped) {
+        if (dialog) setNoteError(mapped); else setError(mapped);
+        // Resync so button state (e.g. the break button) catches up with the server.
+        await refresh().catch(() => {});
+        return false;
+      }
+      if (dialog) setNoteError(GENERIC_ERROR); else setError(GENERIC_ERROR);
       return false;
     } finally {
       setLoading(false);
@@ -70,12 +98,12 @@ export default function EmployeeScreen({ api, user }) {
 
   function toggle() {
     if (!status?.open_session) return run(() => api.post("/session/start"), "بدأ دوامك");
-    if (policy.note_on_stop !== "off") { setAskNote(true); return undefined; }
+    if (policy.note_on_stop !== "off") { setNoteError(""); setAskNote(true); return undefined; }
     return run(() => api.post("/session/stop"), "انتهى دوامك");
   }
 
   async function stopWithNote(note) {
-    const ok = await run(() => api.post("/session/stop", note ? { note } : {}), "انتهى دوامك");
+    const ok = await run(() => api.post("/session/stop", note ? { note } : {}), "انتهى دوامك", { dialog: true });
     if (ok) setAskNote(false);
   }
 
@@ -140,11 +168,11 @@ export default function EmployeeScreen({ api, user }) {
       <MyHistory api={api} />
 
       {askNote && (
-        <StopNoteDialog required={policy.note_on_stop === "required"} loading={loading}
-          onConfirm={stopWithNote} onCancel={() => setAskNote(false)} />
+        <StopNoteDialog required={policy.note_on_stop === "required"} loading={loading} error={noteError}
+          onConfirm={stopWithNote} onCancel={() => { setAskNote(false); setNoteError(""); }} />
       )}
 
-      {error && <div className="panel error">حدث خطأ، حاول مرة أخرى</div>}
+      {error && <div className="panel error">{error}</div>}
     </div>
   );
 }

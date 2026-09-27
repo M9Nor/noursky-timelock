@@ -3,13 +3,18 @@ import Button from "./Button.jsx";
 
 const NOTE_MAX = 500;
 
-export default function StopNoteDialog({ required, loading, onConfirm, onCancel }) {
+export default function StopNoteDialog({ required, loading, error, onConfirm, onCancel }) {
   const [note, setNote] = useState("");
-  const [error, setError] = useState("");
+  const [validationError, setValidationError] = useState("");
+  // The required-note check (local) and a failed stop reported by the parent (external,
+  // e.g. a generic error or a stale session) share the same `.err` span — only one is
+  // ever relevant at a time, and a fresh validation error always wins over a stale one.
+  const shownError = validationError || error || "";
 
   function confirm() {
     const trimmed = note.trim();
-    if (required && !trimmed) { setError("الملاحظة مطلوبة لإنهاء الدوام"); return; }
+    if (required && !trimmed) { setValidationError("الملاحظة مطلوبة لإنهاء الدوام"); return; }
+    setValidationError("");
     onConfirm(trimmed);
   }
 
@@ -25,14 +30,14 @@ export default function StopNoteDialog({ required, loading, onConfirm, onCancel 
         <div className="field">
           <label htmlFor="stop-note">ملاحظة</label>
           <textarea id="stop-note" maxLength={NOTE_MAX} value={note} autoFocus
-            aria-invalid={error ? "true" : undefined}
-            aria-describedby={error ? "stop-note-err" : undefined}
-            onChange={(e) => { setNote(e.target.value); setError(""); }} />
-          {error && <span className="err" id="stop-note-err">{error}</span>}
+            aria-invalid={shownError ? "true" : undefined}
+            aria-describedby={shownError ? "stop-note-err" : undefined}
+            onChange={(e) => { setNote(e.target.value); setValidationError(""); }} />
+          {shownError && <span className="err" id="stop-note-err">{shownError}</span>}
         </div>
         <div className="dlg-a">
           <Button variant="danger" onClick={confirm} loading={loading}>تأكيد الإنهاء</Button>
-          <Button variant="ghost" onClick={onCancel}>إلغاء</Button>
+          <Button variant="ghost" onClick={onCancel} disabled={loading}>إلغاء</Button>
         </div>
       </div>
     </div>

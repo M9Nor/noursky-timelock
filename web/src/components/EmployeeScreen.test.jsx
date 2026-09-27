@@ -147,6 +147,78 @@ describe("EmployeeScreen", () => {
     await waitFor(() => expect(api.post).toHaveBeenCalledWith("/session/stop", { note: "أنهيت العرض" }));
   });
 
+  it("shows a generic error inside the note dialog when the stop fails for another reason", async () => {
+    const t = nowSec();
+    const post = vi.fn(async (path) => {
+      if (path === "/session/stop") throw Object.assign(new Error("SOME_ERROR"), { code: "SOME_ERROR" });
+      return {};
+    });
+    const api = makeApi(
+      { open_session: { id: "s1", started_at: t - 60, break_sec: 0 }, open_break: null, worked_sec: 60, server_time: t },
+      { ...DEFAULT_SETTINGS, note_on_stop: "required" }, null, post
+    );
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    const stop = await screen.findByRole("button", { name: /إنهاء الدوام/ });
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/me/settings"));
+    await new Promise((r) => setTimeout(r, 0));
+    fireEvent.click(stop);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("ملاحظة"), { target: { value: "أنهيت العرض" } });
+    fireEvent.click(screen.getByRole("button", { name: "تأكيد الإنهاء" }));
+    // The error must show up INSIDE the dialog (which stays open), not behind it.
+    const dialog = await screen.findByRole("dialog");
+    expect(await screen.findByText("حدث خطأ، حاول مرة أخرى")).toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it("closes the note dialog and refetches status when the stop fails with NO_OPEN_SESSION", async () => {
+    const t = nowSec();
+    const post = vi.fn(async (path) => {
+      if (path === "/session/stop") throw Object.assign(new Error("NO_OPEN_SESSION"), { code: "NO_OPEN_SESSION" });
+      return {};
+    });
+    const api = makeApi(
+      { open_session: { id: "s1", started_at: t - 60, break_sec: 0 }, open_break: null, worked_sec: 60, server_time: t },
+      { ...DEFAULT_SETTINGS, note_on_stop: "required" }, null, post
+    );
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    const stop = await screen.findByRole("button", { name: /إنهاء الدوام/ });
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/me/settings"));
+    await new Promise((r) => setTimeout(r, 0));
+    fireEvent.click(stop);
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("ملاحظة"), { target: { value: "أنهيت العرض" } });
+    const getCallsBefore = api.get.mock.calls.filter((c) => c[0] === "/me/status").length;
+    fireEvent.click(screen.getByRole("button", { name: "تأكيد الإنهاء" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => {
+      const callsAfter = api.get.mock.calls.filter((c) => c[0] === "/me/status").length;
+      expect(callsAfter).toBeGreaterThan(getCallsBefore);
+    });
+  });
+
+  it("shows a specific message and refreshes when a break action fails with BREAKS_DISABLED", async () => {
+    const t = nowSec();
+    const post = vi.fn(async (path) => {
+      if (path === "/session/break/start") throw Object.assign(new Error("BREAKS_DISABLED"), { code: "BREAKS_DISABLED" });
+      return {};
+    });
+    const api = makeApi(
+      { open_session: { id: "s1", started_at: t - 60, break_sec: 0 }, open_break: null, worked_sec: 60, server_time: t },
+      { ...DEFAULT_SETTINGS, breaks_enabled: true },
+      null, post
+    );
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    const breakBtn = await screen.findByRole("button", { name: /^استراحة$/ });
+    const getCallsBefore = api.get.mock.calls.filter((c) => c[0] === "/me/status").length;
+    fireEvent.click(breakBtn);
+    expect(await screen.findByText("الاستراحات غير مفعّلة")).toBeInTheDocument();
+    await waitFor(() => {
+      const callsAfter = api.get.mock.calls.filter((c) => c[0] === "/me/status").length;
+      expect(callsAfter).toBeGreaterThan(getCallsBefore);
+    });
+  });
+
   it("opens the note dialog when the server says a note is required", async () => {
     const t = nowSec();
     const post = vi.fn(async (path) => {
