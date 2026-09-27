@@ -4,11 +4,9 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `feature/break-modes` — complete, reviewed, **not yet merged**. `main` (live) has
-  phase 2 (flexible breaks + note on stop). **Merge is gated on applying
-  `migrations/003_break_modes.sql` to production first** (the new code reads `break_mode`,
-  `break_policy_since` and `breaks.kind`).
-- **Works (on the branch):** everything on `main`, plus a manager `break_mode` setting:
+- **Branch:** `main` — break modes merged and deployed. Migration 003 applied to production
+  on 2026-09-28 right before the push (Innova's flexible breaks mapped to `break_mode = flexible`).
+- **Works:** phase 2, plus a manager `break_mode` setting:
   `off` / `fixed` (daily HH:MM window in the location timezone, paid or unpaid, no button)
   / `flexible` (the employee button). Unpaid fixed windows are recorded as `breaks` rows
   (`kind='fixed'`) — at most one per session per local day, only for windows starting
@@ -84,8 +82,8 @@ _(append-only, newest on top: date · summary · files · commit)_
   `/me/status` + `/admin/live` expose the window; settings UI; employee/live-floor pause.
   Review fixes: a same-day window change double-deducted pay (now one row per session per
   local day), PUT records begun windows before changing policy, policy applies from save,
-  CSV Hours clamped. Unit 15, frontend 90, smoke 93. Not merged — waiting on production
-  migration 003.
+  CSV Hours clamped. Unit 15, frontend 90, smoke 93. Migration 003 applied in production,
+  merged to `main` and pushed.
 - **2026-09-27** · Attendance policies **phase 2** on `feature/attendance-policies-phase2`
   (plan `docs/superpowers/plans/2026-09-27-attendance-policies-phase2.md`, subagent-driven,
   6 tasks + final review). Migration 002 (`breaks` table, `sessions.note`,
