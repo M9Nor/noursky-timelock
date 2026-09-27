@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import Button from "./Button.jsx";
 import Icon from "./Icon.jsx";
 import { useToast } from "./ToastContext.jsx";
-import { formatHours } from "../time.js";
+import { formatHours, formatLateness, formatStamp } from "../time.js";
 import SessionEditModal from "./SessionEditModal.jsx";
 
 export function todayRange() { const to = Math.floor(Date.now() / 1000); return { from: to - 86400, to }; }
@@ -43,7 +43,8 @@ export default function ReportPanel({ api }) {
 
   async function openDetail(emp) {
     const d = await api.get(`/admin/sessions?from=${range.from}&to=${range.to}&user_id=${emp.user_id}`);
-    setDetail({ ...emp, sessions: d.sessions });
+    // The endpoint reports the location's own timezone; the browser's may differ.
+    setDetail({ ...emp, sessions: d.sessions, timezone: d.timezone ?? report?.timezone });
   }
   async function exportCsv() {
     try { await api.download(`/admin/export.csv?from=${range.from}&to=${range.to}`, `timeclock-${range.from}-${range.to}.csv`); toast("تم تصدير الملف"); }
@@ -108,11 +109,15 @@ export default function ReportPanel({ api }) {
         <div className="panel" style={{ marginTop: 16 }}>
           <div className="panel-h"><h3>جلسات: {detail.name}</h3><Button variant="ghost" size="sm" onClick={() => setDetail(null)}>إغلاق</Button></div>
           <div className="table-wrap"><table>
-            <thead><tr><th scope="col">البداية</th><th scope="col">النهاية</th><th scope="col">الإغلاق</th><th scope="col"></th></tr></thead>
+            <thead><tr>
+              <th scope="col">البداية</th><th scope="col">النهاية</th>
+              <th scope="col">التأخير</th><th scope="col">الإغلاق</th><th scope="col"></th>
+            </tr></thead>
             <tbody>{detail.sessions.map((s) => (
               <tr key={s.id}>
-                <td className="num">{new Date(s.started_at * 1000).toLocaleString("en-GB")}</td>
-                <td className="num">{s.ended_at ? new Date(s.ended_at * 1000).toLocaleString("en-GB") : "مفتوحة"}</td>
+                <td className="ltr">{formatStamp(s.started_at, detail.timezone)}</td>
+                <td className="ltr">{s.ended_at ? formatStamp(s.ended_at, detail.timezone) : "مفتوحة"}</td>
+                <td className="late">{formatLateness(s.late_by_sec)}</td>
                 <td>{s.closed_by ?? "—"}</td>
                 <td><Button variant="ghost" size="sm" onClick={() => setEditing(s)}>تعديل</Button></td>
               </tr>

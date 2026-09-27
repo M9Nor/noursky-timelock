@@ -441,7 +441,49 @@ app.get("/admin/sessions", authed, managerOnly, async (c) => {
       LIMIT 1000`,
     { loc, from, to, uid }
   );
-  return c.json({ sessions });
+
+  // Annotate each session with how late it was, so the manager can audit the
+  // late_days count in /admin/report instead of just seeing a total.
+  // Lateness belongs to the DAY's first session (spec §5.1), so MIN(started_at) is
+  // resolved over whole local days — never restricted to [:from, :to) — otherwise a
+  // day whose real first session precedes a rolling window would mark the wrong
+  // session as late.
+  const st = await getSettings(loc);
+  const tz = st?.timezone ?? "Asia/Riyadh";
+  const ws = st?.work_start ?? null;
+  const lateAfterSec = ws
+    ? Number(ws.slice(0, 2)) * 3600 + Number(ws.slice(3, 5)) * 60 + Number(st?.late_grace_minutes ?? 15) * 60
+    : null;
+  const off = tzOffsetSec(tz, new Date(now() * 1000));
+  const localDay = (ts) => Math.floor((Number(ts) + off) / 86400);
+  const localTod = (ts) => (((Number(ts) + off) % 86400) + 86400) % 86400;
+
+  let firstByUserDay = new Map();
+  if (lateAfterSec !== null && sessions.length) {
+    const rows = await q(
+      `SELECT s.user_id, MIN(s.started_at) AS first_started_at
+         FROM sessions s
+        WHERE s.location_id = :loc
+          AND DATE(FROM_UNIXTIME(s.started_at + :off))
+              BETWEEN DATE(FROM_UNIXTIME(:from + :off)) AND DATE(FROM_UNIXTIME(:to - 1 + :off))
+          AND (:uid IS NULL OR s.user_id = :uid)
+        GROUP BY s.user_id, DATE(FROM_UNIXTIME(s.started_at + :off))`,
+      { loc, off, from, to, uid }
+    );
+    firstByUserDay = new Map(
+      rows.map((r) => [`${r.user_id}|${localDay(r.first_started_at)}`, Number(r.first_started_at)])
+    );
+  }
+
+  const annotated = sessions.map((s) => {
+    if (lateAfterSec === null) return { ...s, late_by_sec: null };
+    const first = firstByUserDay.get(`${s.user_id}|${localDay(s.started_at)}`);
+    const isDayFirst = first !== undefined && first === Number(s.started_at);
+    const over = localTod(s.started_at) - lateAfterSec;
+    return { ...s, late_by_sec: isDayFirst && over > 0 ? over : null };
+  });
+
+  return c.json({ sessions: annotated, timezone: tz, work_start: ws });
 });
 
 app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {

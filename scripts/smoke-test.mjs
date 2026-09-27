@@ -228,6 +228,29 @@ check("grace boundary: local 09:15:01 IS late",
   oneLate.pin === 200 && oneLate.late_days === 1 && oneLate.days_present === 1,
   `(late_days ${JSON.stringify(oneLate.late_days)}, days_present ${JSON.stringify(oneLate.days_present)})`);
 
+// /admin/sessions must annotate the day's FIRST session with how late it was, so the
+// manager can audit the late_days total. 09:15:01 is 1s past the 09:15:00 threshold.
+const lateList = await call(TM, "GET", `/admin/sessions?from=${tzFrom}&to=${tzTo}&user_id=${TZLOC}-u1`);
+const lateSession = lateList.body?.sessions?.find((x) => x.id === tzSid);
+check("sessions annotate the day's first late session",
+  lateList.status === 200 && lateSession?.late_by_sec === 1,
+  `(late_by_sec ${JSON.stringify(lateSession?.late_by_sec)})`);
+check("sessions response carries the location timezone",
+  lateList.body?.timezone === "Asia/Dubai", `(got ${JSON.stringify(lateList.body?.timezone)})`);
+
+// A later session on the same local day is not the day's first, so it is never late.
+const tzSecondStart = onTimeAt + 6 * 3600;
+const tzSecondOpen = await call(TE, "POST", "/session/start");
+const tzSecondId = tzSecondOpen.body?.id;
+await call(TM, "PATCH", `/admin/sessions/${tzSecondId}`,
+  { started_at: tzSecondStart, ended_at: tzSecondStart + 1800, reason: "جلسة ثانية بنفس اليوم للاختبار" });
+const tzBothList = await call(TM, "GET", `/admin/sessions?from=${tzFrom}&to=${tzTo}&user_id=${TZLOC}-u1`);
+const tzSecondRow = tzBothList.body?.sessions?.find((x) => x.id === tzSecondId);
+const tzFirstRow = tzBothList.body?.sessions?.find((x) => x.id === tzSid);
+check("a later session on the same day is not marked late",
+  tzSecondRow?.late_by_sec === null && tzFirstRow?.late_by_sec === 1,
+  `(second ${JSON.stringify(tzSecondRow?.late_by_sec)}, first ${JSON.stringify(tzFirstRow?.late_by_sec)})`);
+
 // Remove the grace fixture's rows. Only attempted against a local dev database, so a
 // run pointed at a remote/production host simply skips it and leaves that DB untouched.
 await cleanupLocation(TZLOC);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration, formatHours, serverOffset, formatClock } from "./time.js";
+import { formatDuration, formatHours, serverOffset, formatClock, formatLateness, formatStamp } from "./time.js";
 
 describe("time helpers", () => {
   it("formats duration as H:MM:SS with Western digits", () => {
@@ -31,5 +31,43 @@ describe("formatClock", () => {
   });
   it("clamps negatives to zero", () => {
     expect(formatClock(-5)).toEqual({ h: 0, mm: "00", ss: "00" });
+  });
+});
+
+describe("formatLateness", () => {
+  it("rounds any lateness up to a whole minute so a few seconds still show", () => {
+    expect(formatLateness(1)).toBe("متأخر 1 د");
+    expect(formatLateness(59)).toBe("متأخر 1 د");
+    expect(formatLateness(31 * 60)).toBe("متأخر 31 د");
+  });
+
+  it("splits an hour or more into hours and minutes", () => {
+    expect(formatLateness(3600)).toBe("متأخر 1 س");
+    expect(formatLateness(90 * 60)).toBe("متأخر 1 س 30 د");
+    expect(formatLateness(125 * 60)).toBe("متأخر 2 س 5 د");
+  });
+
+  it("returns an empty string when there is no lateness", () => {
+    expect(formatLateness(null)).toBe("");
+    expect(formatLateness(0)).toBe("");
+    expect(formatLateness(undefined)).toBe("");
+  });
+});
+
+describe("formatStamp", () => {
+  it("renders the timestamp in the given timezone, not the browser one", () => {
+    // 2026-09-24T21:30:00Z is already the 25th in Asia/Riyadh (UTC+3).
+    const ts = Date.UTC(2026, 8, 24, 21, 30) / 1000;
+    expect(formatStamp(ts, "Asia/Riyadh")).toBe("25/09/2026, 00:30");
+    expect(formatStamp(ts, "UTC")).toBe("24/09/2026, 21:30");
+  });
+
+  it("falls back to the browser timezone when the zone is unusable", () => {
+    const ts = Date.UTC(2026, 8, 24, 21, 30) / 1000;
+    expect(formatStamp(ts, "Not/AZone")).toMatch(/2026, \d{2}:\d{2}$/);
+  });
+
+  it("returns a dash for a missing timestamp", () => {
+    expect(formatStamp(null, "UTC")).toBe("—");
   });
 });

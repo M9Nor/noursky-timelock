@@ -5,13 +5,13 @@ import ReportPanel from "./ReportPanel.jsx";
 
 const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
 
-function makeApi({ work_start = "09:00", employees } = {}) {
+function makeApi({ work_start = "09:00", employees, sessions = [], timezone = "Asia/Riyadh" } = {}) {
   const defaultEmployees = [{ user_id: "a", name: "أحمد", worked_sec: 3600, sessions_count: 1, days_present: 1, auto_closed: 0, late_days: 0 }];
   return {
     get: vi.fn(async (p) => p.startsWith("/admin/report")
-      ? { from: 0, to: 1, timezone: "Asia/Riyadh", daily_target_hours: 8, work_start,
+      ? { from: 0, to: 1, timezone, daily_target_hours: 8, work_start,
           employees: employees ?? defaultEmployees }
-      : { sessions: [] }),
+      : { sessions, timezone, work_start }),
     download: vi.fn(async () => {}),
   };
 }
@@ -71,5 +71,42 @@ describe("ReportPanel", () => {
     expect(await screen.findByText("أيام التأخير")).toBeInTheDocument();
     expect(await screen.findByText("—")).toBeInTheDocument();
     expect(screen.queryByText("4")).not.toBeInTheDocument();
+  });
+  it("marks the late session inside the employee's session detail", async () => {
+    const start = Date.UTC(2026, 8, 24, 6, 31) / 1000; // 09:31 in Asia/Riyadh
+    const api = makeApi({
+      sessions: [
+        { id: 1, user_id: "a", started_at: start, ended_at: start + 3600, closed_by: null, late_by_sec: 31 * 60 },
+        { id: 2, user_id: "a", started_at: start + 7200, ended_at: null, closed_by: null, late_by_sec: null },
+      ],
+    });
+    wrap(<ReportPanel api={api} />);
+    fireEvent.click(await screen.findByText("أحمد"));
+    expect(await screen.findByText("متأخر 31 د")).toBeInTheDocument();
+    // Only the first session of the day is flagged, so exactly one cell carries it.
+    expect(screen.getAllByText("متأخر 31 د")).toHaveLength(1);
+  });
+
+  it("renders detail timestamps in the location timezone, not the browser one", async () => {
+    const start = Date.UTC(2026, 8, 24, 21, 30) / 1000; // already the 25th in Asia/Riyadh
+    const api = makeApi({
+      timezone: "Asia/Riyadh",
+      sessions: [{ id: 1, user_id: "a", started_at: start, ended_at: null, closed_by: null, late_by_sec: null }],
+    });
+    wrap(<ReportPanel api={api} />);
+    fireEvent.click(await screen.findByText("أحمد"));
+    expect(await screen.findByText("25/09/2026, 00:30")).toBeInTheDocument();
+  });
+
+  it("leaves the lateness column empty when work_start is not configured", async () => {
+    const start = Date.UTC(2026, 8, 24, 6, 31) / 1000;
+    const api = makeApi({
+      work_start: null,
+      sessions: [{ id: 1, user_id: "a", started_at: start, ended_at: null, closed_by: null, late_by_sec: null }],
+    });
+    wrap(<ReportPanel api={api} />);
+    fireEvent.click(await screen.findByText("أحمد"));
+    expect(await screen.findByText("مفتوحة")).toBeInTheDocument();
+    expect(screen.queryByText(/متأخر/)).not.toBeInTheDocument();
   });
 });
