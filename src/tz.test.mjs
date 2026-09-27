@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tzOffsetSec, tzSegments, localZone } from "./tz.js";
+import { tzOffsetSec, tzSegments, localZone, localDate, wallToUtc, fixedWindows } from "./tz.js";
 
 const utc = (...a) => Date.UTC(...a) / 1000;
 
@@ -60,4 +60,35 @@ test("tzSegments stays bounded for an absurd range", () => {
   const t0 = Date.now();
   tzSegments("Europe/Berlin", 0, utc(2026, 8, 1));
   assert.ok(Date.now() - t0 < 2000, "should not walk decades day by day without a cap");
+});
+
+test("localDate returns the local calendar date", () => {
+  // 22:30Z on the 24th is already the 25th in Riyadh (UTC+3).
+  assert.deepEqual(localDate("Asia/Riyadh", utc(2026, 8, 24, 22, 30)), { y: 2026, m: 9, d: 25 });
+  assert.deepEqual(localDate("UTC", utc(2026, 8, 24, 22, 30)), { y: 2026, m: 9, d: 24 });
+});
+
+test("wallToUtc converts a local wall-clock time, DST-aware", () => {
+  assert.equal(wallToUtc("Asia/Riyadh", { y: 2026, m: 9, d: 24 }, "13:00"), utc(2026, 8, 24, 10));
+  // Berlin is UTC+1 in winter and UTC+2 in summer.
+  assert.equal(wallToUtc("Europe/Berlin", { y: 2026, m: 3, d: 20 }, "13:00"), utc(2026, 2, 20, 12));
+  assert.equal(wallToUtc("Europe/Berlin", { y: 2026, m: 4, d: 10 }, "13:00"), utc(2026, 3, 10, 11));
+});
+
+test("fixedWindows yields one window per local date the range touches", () => {
+  // 09:00 local on the 24th to 17:00 local on the 25th, Riyadh.
+  const w = fixedWindows("Asia/Riyadh", utc(2026, 8, 24, 6), utc(2026, 8, 25, 14), "13:00", "14:00");
+  assert.deepEqual(w, [
+    [utc(2026, 8, 24, 10), utc(2026, 8, 24, 11)],
+    [utc(2026, 8, 25, 10), utc(2026, 8, 25, 11)],
+  ]);
+  assert.equal(fixedWindows("Asia/Riyadh", utc(2026, 8, 24, 6), utc(2026, 8, 24, 14), "13:00", "14:00").length, 1);
+});
+
+test("fixedWindows follows DST across a change", () => {
+  const w = fixedWindows("Europe/Berlin", utc(2026, 2, 28, 9), utc(2026, 2, 29, 15), "13:00", "14:00");
+  assert.deepEqual(w, [
+    [utc(2026, 2, 28, 12), utc(2026, 2, 28, 13)], // CET
+    [utc(2026, 2, 29, 11), utc(2026, 2, 29, 12)], // CEST from the 29th
+  ]);
 });

@@ -92,3 +92,34 @@ export function localZone(tz, fromTs, toTs) {
     sqlLocalDate: (col) => `DATE(FROM_UNIXTIME(${col} + ${sqlOffset(col)}))`,
   };
 }
+
+/** Local calendar date { y, m, d } of an instant in a zone. */
+export function localDate(tz, ts) {
+  const p = Object.fromEntries(
+    formatter(tz).formatToParts(new Date(Math.floor(Number(ts)) * 1000)).map((x) => [x.type, x.value])
+  );
+  return { y: +p.year, m: +p.month, d: +p.day };
+}
+
+/** UTC seconds of a local wall-clock time ("HH:MM") on a local date. DST-aware. */
+export function wallToUtc(tz, { y, m, d }, hhmm) {
+  const [hh, mm] = hhmm.split(":").map(Number);
+  const asIfUtc = Date.UTC(y, m - 1, d, hh, mm) / 1000;
+  // Two passes: the first lands within one offset of the answer, the second uses the
+  // offset actually in force at that instant (they differ only around a DST change).
+  const first = asIfUtc - tzOffsetSec(tz, new Date(asIfUtc * 1000));
+  return asIfUtc - tzOffsetSec(tz, new Date(first * 1000));
+}
+
+/** A daily local window as UTC [start, end] pairs, one per local date in [fromTs, toTs]. */
+export function fixedWindows(tz, fromTs, toTs, start, end) {
+  const out = [];
+  const key = (x) => x.y * 10000 + x.m * 100 + x.d;
+  const last = key(localDate(tz, toTs));
+  for (let cur = localDate(tz, fromTs); key(cur) <= last;) {
+    out.push([wallToUtc(tz, cur, start), wallToUtc(tz, cur, end)]);
+    const next = new Date(Date.UTC(cur.y, cur.m - 1, cur.d + 1));
+    cur = { y: next.getUTCFullYear(), m: next.getUTCMonth() + 1, d: next.getUTCDate() };
+  }
+  return out;
+}
