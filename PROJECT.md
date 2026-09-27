@@ -185,7 +185,11 @@ role === "admin"  أو  type === "agency"   →  manager
 | `daily_target_hours` | DECIMAL(4,2) | 8 | |
 | `work_start` | CHAR(5) NULL | `09:00` | أول وقت العمل الرسمي. `NULL` = التأخير معطّل. لو محدد، أي جلسة أول جلسة بيومها المحلي وبلّشت بعد `work_start + late_grace_minutes` بتنعتبر متأخرة (شوف `/admin/report`، §5.1) |
 | `late_grace_minutes` | INT | 15 | سماحية بالدقايق قبل ما الجلسة تنعتبر متأخرة |
-| `breaks_enabled` | TINYINT(1) | 0 | إذا مفعّل، زر الاستراحة بيظهر للموظف |
+| `breaks_enabled` | TINYINT(1) | 0 | متزامن تلقائياً مع `break_mode = 'flexible'` — للتوافق مع كود قديم، مش مصدر الحقيقة بعد الآن (شوف `break_mode`) |
+| `break_mode` | ENUM(`off`,`fixed`,`flexible`) | `off` | نوع الاستراحة: بدون / ثابتة يحددها المدير / مرنة بزر الموظف |
+| `break_start` | CHAR(5) NULL | `NULL` | بداية النافذة الثابتة، `HH:MM` بتوقيت الحساب — إلزامية مع `fixed`، ولازم تكون بنفس اليوم وقبل `break_end` |
+| `break_end` | CHAR(5) NULL | `NULL` | نهاية النافذة الثابتة، `HH:MM` بتوقيت الحساب — إلزامية مع `fixed` |
+| `break_paid` | TINYINT(1) | 0 | إذا 1، الاستراحة الثابتة ما بتنخصم من وقت العمل |
 | `note_on_stop` | ENUM(`off`,`optional`,`required`) | `off` | سياسة الملاحظة عند إنهاء الدوام |
 | `max_session_hours` | DECIMAL(4,2) | 12 | حد الإغلاق التلقائي |
 | `updated_at` | BIGINT | | |
@@ -221,10 +225,12 @@ role === "admin"  أو  type === "agency"   →  manager
 | `id` | UUID |
 | `session_id` | الجلسة اللي فيها الاستراحة |
 | `location_id` | مكرّر من الجلسة، عشان الفهرسة والعزل بين العملاء بدون JOIN بكل استعلام |
+| `kind` | ENUM(`employee`,`fixed`) — `employee` = زر الموظف، `fixed` = نافذة ثابتة انسجلت تلقائياً |
 | `started_at`, `ended_at` | UNIX seconds، `ended_at = NULL` يعني الاستراحة مفتوحة |
 | `open_flag` | **Generated column:** `1` إذا مفتوحة، `NULL` إذا مسكّرة |
+| `fixed_key` | **Generated column:** `started_at` إذا `kind = 'fixed'`، وإلا `NULL` |
 
-**الحماية من الاستراحات المكررة:** `UNIQUE (session_id, open_flag)` — نفس أسلوب `sessions`، استراحة مفتوحة وحدة بس لكل جلسة، محمي على مستوى الداتابيز.
+**الحماية من الاستراحات المكررة:** `UNIQUE (session_id, open_flag)` — نفس أسلوب `sessions`، استراحة مفتوحة وحدة بس لكل جلسة، محمي على مستوى الداتابيز. `UNIQUE (session_id, fixed_key)` — صف واحد بس لكل جلسة لكل نافذة ثابتة.
 
 **حساب وقت العمل:** ما في عمود مخزّن لوقت العمل — بينحسب دائماً وقت القراءة كـ `duration_sec − break_sec`، ووقت كل استراحة **محصور (clipped) بحدود جلستها**: `LEAST(break.ended_at, session.ended_at) − GREATEST(break.started_at, session.started_at)`. هيك لو المدير قصّر جلسة بالتعديل اليدوي، أي استراحة فيها بتنقص معها تلقائياً بدل ما تصير أكبر من مدة الجلسة. استراحة شغالة (مفتوحة) بتنحسب لحظة القراءة بس (تقاس لـ `now`، مش أكتر).
 
@@ -258,7 +264,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | GET | `/me/status?since=` | `{ open_session: {id, started_at, break_sec} \| null, open_break: {id, started_at} \| null, worked_sec, server_time }`. `worked_sec` بدون الاستراحات. `since` افتراضياً آخر 24 ساعة. |
 | POST | `/session/start` | `201 { id, started_at }` · `409 SESSION_ALREADY_OPEN` |
 | POST | `/session/stop` | Body اختياري: `{ note }` (حد أقصى 500 حرف). `200 { id, started_at, ended_at, duration_sec, break_sec, note }` — `duration_sec` المدة الكاملة، ووقت العمل = `duration_sec − break_sec`. إذا في استراحة مفتوحة بتسكّر معها. الملاحظة بتنحفظ بس إذا سياسة `note_on_stop` مش `off` · `400 NOTE_REQUIRED` · `400 NOTE_TOO_LONG` · `409 NO_OPEN_SESSION` |
-| POST | `/session/break/start` | `201 { id, session_id, started_at }` · `403 BREAKS_DISABLED` · `409 NO_OPEN_SESSION` · `409 BREAK_ALREADY_OPEN` |
+| POST | `/session/break/start` | `201 { id, session_id, started_at }` · `403 BREAKS_DISABLED` · `409 NO_OPEN_SESSION` · `409 BREAK_ALREADY_OPEN` — مسموح بس لما `break_mode = flexible` |
 | POST | `/session/break/stop` | `200 { id, started_at, ended_at, duration_sec }` · `409 NO_OPEN_BREAK` — مسموح حتى لو المدير لغى الاستراحات |
 
 ### المدير (`role = manager` فقط، غير هيك `403 FORBIDDEN`)
@@ -271,7 +277,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | PATCH | `/admin/sessions/:id` | Body: `{ started_at, ended_at, reason }` — السبب إجباري |
 | GET | `/admin/export.csv?from=&to=` | CSV مع BOM: Employee, Email, Start, End, Hours (بدون الاستراحات), Break (min), Closed by, Note. الأوقات بالـ timezone تبع الحساب، وأي خلية بتبدأ بـ = + - @ بتنسبق بـ ' لحتى ما تشتغل كمعادلة |
 | GET | `/admin/settings` | الإعدادات الحالية |
-| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, late_grace_minutes, breaks_enabled, note_on_stop }` — `breaks_enabled` boolean (افتراضي `false`)، `note_on_stop` واحد من `off`/`optional`/`required` (افتراضي `off`). الحقل الناقص = القيمة الافتراضية |
+| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص = القيمة الافتراضية |
 
 ### رموز الأخطاء
 
@@ -296,6 +302,8 @@ role === "admin"  أو  type === "agency"   →  manager
 | `INVALID_BREAKS` | 400 | `breaks_enabled` مش boolean | إعداد الاستراحات غير صحيح |
 | `INVALID_NOTE_POLICY` | 400 | `note_on_stop` مش من القيم المسموحة | إعداد الملاحظة غير صحيح |
 | `BREAKS_DISABLED` | 403 | المدير ما فعّل الاستراحات | الاستراحات غير مفعّلة |
+| `INVALID_BREAK_MODE` | 400 | `break_mode` مش من القيم المسموحة | نوع الاستراحة غير صحيح |
+| `INVALID_BREAK_WINDOW` | 400 | وقت الاستراحة الثابتة ناقص أو غلط أو النهاية قبل البداية | وقت الاستراحة غير صحيح |
 | `BREAK_ALREADY_OPEN` | 409 | | أنت في استراحة بالفعل |
 | `NO_OPEN_BREAK` | 409 | | لا توجد استراحة مفتوحة |
 | `NOTE_REQUIRED` | 400 | المدير خلّى الملاحظة إلزامية | اكتب ملاحظة قبل إنهاء الدوام |

@@ -144,10 +144,12 @@ async function getSettings(loc) {
   const rows = await q("SELECT * FROM settings WHERE location_id = :loc", { loc });
   const st = rows[0];
   // TINYINT(1) arrives as 0/1; the API speaks booleans.
-  return st ? { ...st, breaks_enabled: Boolean(st.breaks_enabled) } : null;
+  return st ? { ...st, breaks_enabled: Boolean(st.breaks_enabled), break_paid: Boolean(st.break_paid) } : null;
 }
 
 const NOTE_POLICIES = ["off", "optional", "required"];
+const BREAK_MODES = ["off", "fixed", "flexible"];
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /**
  * Caps forgotten sessions at max_session_hours and flags them 'auto'.
@@ -293,6 +295,10 @@ app.get("/me/settings", authed, async (c) => {
     work_start: st?.work_start ?? null,
     breaks_enabled: Boolean(st?.breaks_enabled),
     note_on_stop: st?.note_on_stop ?? "off",
+    break_mode: st?.break_mode ?? "off",
+    break_start: st?.break_start ?? null,
+    break_end: st?.break_end ?? null,
+    break_paid: Boolean(st?.break_paid),
   });
 });
 
@@ -334,7 +340,8 @@ app.post("/session/start", authed, async (c) => {
 app.post("/session/break/start", authed, async (c) => {
   const { uid, loc } = c.get("claims");
   await autoCloseStale(loc);
-  if (!(await getSettings(loc))?.breaks_enabled) throw new HttpError(403, "BREAKS_DISABLED");
+  // Only flexible mode has an employee-driven break; fixed windows are automatic.
+  if ((await getSettings(loc))?.break_mode !== "flexible") throw new HttpError(403, "BREAKS_DISABLED");
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -724,7 +731,7 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   if (!b.timezone) throw new HttpError(400, "INVALID_TIMEZONE");
   const target = Number(b.daily_target_hours), max = Number(b.max_session_hours);
   if (!(target > 0 && target <= 24) || !(max >= 1 && max <= 24)) throw new HttpError(400, "INVALID_HOURS");
-  if (b.work_start && !/^([01]\d|2[0-3]):[0-5]\d$/.test(b.work_start)) throw new HttpError(400, "INVALID_WORK_START");
+  if (b.work_start && !HHMM.test(b.work_start)) throw new HttpError(400, "INVALID_WORK_START");
   // Absent / null / empty-string grace falls back to the 15-minute default: an emptied
   // UI field arrives as "" and Number("") === 0, which would silently make the policy
   // "late one second after work_start". An explicit numeric 0 still means "no grace".
@@ -732,17 +739,37 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   const grace = rawGrace === undefined || rawGrace === null || rawGrace === "" ? 15 : Number(rawGrace);
   if (!Number.isInteger(grace) || grace < 0 || grace > 240) throw new HttpError(400, "INVALID_GRACE");
   // PUT replaces the whole policy: an omitted field means the default, not "unchanged".
-  const breaks = b.breaks_enabled === undefined ? false : b.breaks_enabled;
-  if (typeof breaks !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
+  if (b.breaks_enabled !== undefined && typeof b.breaks_enabled !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
+  // A stale tab running the previous bundle sends only breaks_enabled; map it so saving
+  // there keeps a flexible-break policy instead of silently switching breaks off.
+  const breakMode = b.break_mode ?? (b.breaks_enabled === true ? "flexible" : "off");
+  if (!BREAK_MODES.includes(breakMode)) throw new HttpError(400, "INVALID_BREAK_MODE");
+  const breakStart = b.break_start || null, breakEnd = b.break_end || null;
+  if ((breakStart && !HHMM.test(breakStart)) || (breakEnd && !HHMM.test(breakEnd))) {
+    throw new HttpError(400, "INVALID_BREAK_WINDOW");
+  }
+  // Same-day windows only; zero-padded HH:MM compares correctly as strings.
+  if (breakMode === "fixed" && (!breakStart || !breakEnd || breakStart >= breakEnd)) {
+    throw new HttpError(400, "INVALID_BREAK_WINDOW");
+  }
+  const breakPaid = b.break_paid === undefined ? false : b.break_paid;
+  if (typeof breakPaid !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
   const notePolicy = b.note_on_stop === undefined ? "off" : b.note_on_stop;
   if (!NOTE_POLICIES.includes(notePolicy)) throw new HttpError(400, "INVALID_NOTE_POLICY");
 
   await q(
     `UPDATE settings SET timezone = :tz, daily_target_hours = :target, work_start = :ws,
                          late_grace_minutes = :grace, max_session_hours = :max,
-                         breaks_enabled = :breaks, note_on_stop = :notePolicy, updated_at = :t
+                         breaks_enabled = :breaksEnabled, break_mode = :breakMode,
+                         break_start = :breakStart, break_end = :breakEnd, break_paid = :breakPaid,
+                         note_on_stop = :notePolicy, updated_at = :t
       WHERE location_id = :loc`,
-    { tz: b.timezone, target, ws: b.work_start ?? null, grace, max, breaks: breaks ? 1 : 0, notePolicy, t: now(), loc }
+    {
+      tz: b.timezone, target, ws: b.work_start ?? null, grace, max,
+      // Kept in sync so code that still reads breaks_enabled behaves the same.
+      breaksEnabled: breakMode === "flexible" ? 1 : 0, breakMode, breakStart, breakEnd,
+      breakPaid: breakPaid ? 1 : 0, notePolicy, t: now(), loc,
+    }
   );
   return c.json(await getSettings(loc));
 });

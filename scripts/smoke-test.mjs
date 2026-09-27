@@ -402,6 +402,47 @@ check("note is ignored when the policy is off", unnoted.status === 200 && unnote
 
 await cleanupLocation(P2LOC);
 
+// --- Break modes (spec §5.4b): off / fixed / flexible. Own location; removed at the end.
+const FXLOC = `${LOC}-fx`;
+const fxMgr = await sso({ userId: `${FXLOC}-m1`, role: "admin", type: "account", activeLocation: FXLOC, userName: "مدير الاستراحة", email: "fm@x.com" });
+const fxEmp = await sso({ userId: `${FXLOC}-u1`, role: "user", type: "account", activeLocation: FXLOC, userName: "موظف الاستراحة", email: "fe@x.com" });
+const FM = fxMgr.body?.token, FE = fxEmp.body?.token;
+const fxBase = { timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: null, late_grace_minutes: 15, note_on_stop: "off" };
+const fxPolicy = (extra) => call(FM, "PUT", "/admin/settings", { ...fxBase, ...extra });
+
+const fxDefaults = await call(FM, "GET", "/admin/settings");
+check("break mode defaults to off",
+  fxDefaults.body?.break_mode === "off" && fxDefaults.body?.break_paid === false && fxDefaults.body?.break_start === null,
+  `(${JSON.stringify(fxDefaults.body)})`);
+const fxSaved = await fxPolicy({ break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: false });
+check("fixed break window saved",
+  fxSaved.status === 200 && fxSaved.body?.break_mode === "fixed" && fxSaved.body?.break_start === "13:00"
+    && fxSaved.body?.break_end === "14:00" && fxSaved.body?.break_paid === false && fxSaved.body?.breaks_enabled === false,
+  `(${JSON.stringify(fxSaved.body)})`);
+check("fixed mode without a window → 400",
+  (await fxPolicy({ break_mode: "fixed" })).body?.error === "INVALID_BREAK_WINDOW");
+check("fixed window ending before it starts → 400",
+  (await fxPolicy({ break_mode: "fixed", break_start: "14:00", break_end: "13:00" })).body?.error === "INVALID_BREAK_WINDOW");
+check("malformed window time → 400",
+  (await fxPolicy({ break_mode: "fixed", break_start: "1pm", break_end: "14:00" })).body?.error === "INVALID_BREAK_WINDOW");
+check("unknown break mode → 400", (await fxPolicy({ break_mode: "sometimes" })).body?.error === "INVALID_BREAK_MODE");
+check("non-boolean break_paid → 400",
+  (await fxPolicy({ break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: "yes" })).body?.error === "INVALID_BREAKS");
+const fxLegacy = await fxPolicy({ breaks_enabled: true });
+check("a body with only breaks_enabled: true still means flexible",
+  fxLegacy.body?.break_mode === "flexible" && fxLegacy.body?.breaks_enabled === true, `(${JSON.stringify(fxLegacy.body)})`);
+await fxPolicy({ break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: true });
+const fxMe = await call(FE, "GET", "/me/settings");
+check("employee sees the break mode and window",
+  fxMe.body?.break_mode === "fixed" && fxMe.body?.break_start === "13:00" && fxMe.body?.break_end === "14:00" && fxMe.body?.break_paid === true,
+  `(${JSON.stringify(fxMe.body)})`);
+await call(FE, "POST", "/session/start");
+check("the break button is refused in fixed mode",
+  (await call(FE, "POST", "/session/break/start")).body?.error === "BREAKS_DISABLED");
+await call(FE, "POST", "/session/stop");
+
+await cleanupLocation(FXLOC);
+
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
 
 // --- dev-login (only meaningful when the target server runs with NODE_ENV != production) ---

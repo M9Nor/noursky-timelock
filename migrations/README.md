@@ -21,3 +21,4 @@ When adding a column: add it to `schema.sql` **and** add the next numbered file 
 |---|---|---|
 | `001_late_grace_minutes.sql` | 2026-09-26 | run manually in phpMyAdmin before phase 1 deploy |
 | `002_breaks_and_notes.sql` | 2026-09-27 | run manually in phpMyAdmin before phase 2 deploy |
+| `003_break_modes.sql` | pending | apply before deploying break modes |

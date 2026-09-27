@@ -10,6 +10,10 @@ CREATE TABLE IF NOT EXISTS settings (
   late_grace_minutes INT          NOT NULL DEFAULT 15,
   breaks_enabled     TINYINT(1)   NOT NULL DEFAULT 0,
   note_on_stop       ENUM('off','optional','required') NOT NULL DEFAULT 'off',
+  break_mode         ENUM('off','fixed','flexible') NOT NULL DEFAULT 'off',
+  break_start        CHAR(5)      NULL,
+  break_end          CHAR(5)      NULL,
+  break_paid         TINYINT(1)   NOT NULL DEFAULT 0,
   max_session_hours  DECIMAL(4,2) NOT NULL DEFAULT 12,
   updated_at         BIGINT       NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -63,11 +67,15 @@ CREATE TABLE IF NOT EXISTS breaks (
   id          CHAR(36)    NOT NULL PRIMARY KEY,
   session_id  CHAR(36)    NOT NULL,
   location_id VARCHAR(64) NOT NULL,
+  kind        ENUM('employee','fixed') NOT NULL DEFAULT 'employee',
   started_at  BIGINT      NOT NULL,
   ended_at    BIGINT      NULL,
   -- 1 while the break is open, NULL once ended → one open break per session.
   open_flag   TINYINT GENERATED ALWAYS AS (IF(ended_at IS NULL, 1, NULL)) STORED,
+  -- Started_at for fixed rows, NULL for employee breaks: one row per session per window.
+  fixed_key   BIGINT GENERATED ALWAYS AS (IF(kind = 'fixed', started_at, NULL)) STORED,
   UNIQUE KEY ux_one_open_break (session_id, open_flag),
+  UNIQUE KEY ux_fixed_window (session_id, fixed_key),
   KEY ix_breaks_session (session_id),
   -- Covers autoCloseStale's per-location "close still-open breaks" UPDATE, which
   -- filters on (location_id, ended_at IS NULL) on every request.
