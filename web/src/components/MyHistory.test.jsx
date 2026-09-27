@@ -45,4 +45,15 @@ describe("MyHistory", () => {
     expect(await screen.findByText("24/09, 17:30")).toBeInTheDocument();
     expect(api.get).toHaveBeenCalledWith("/me/sessions?days=7");
   });
+
+  it("shows worked hours without the breaks", async () => {
+    const api = {
+      get: vi.fn(async () => ({
+        timezone: "Asia/Riyadh",
+        sessions: [{ id: "d", started_at: 1758700000, ended_at: 1758728800, duration_sec: 28800, break_sec: 1800, closed_by: "user" }],
+      })),
+    };
+    render(<MyHistory api={api} />);
+    expect(await screen.findByText("7.50")).toBeInTheDocument();
+  });
 });

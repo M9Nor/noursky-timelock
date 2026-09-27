@@ -30,7 +30,7 @@ export default function MyHistory({ api }) {
                 <tr key={s.id}>
                   <td className="ltr">{formatStamp(s.started_at, timezone, { year: false })}</td>
                   <td className="ltr">{formatStamp(s.ended_at, timezone, { year: false })}</td>
-                  <td className="num">{s.duration_sec ? formatHours(s.duration_sec) : "—"}</td>
+                  <td className="num">{s.duration_sec ? formatHours(s.duration_sec - (s.break_sec ?? 0)) : "—"}</td>
                   <td>{s.closed_by === "auto" ? "أُغلقت تلقائياً" : ""}</td>
                 </tr>
               ))}

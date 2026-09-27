@@ -32,7 +32,9 @@ export default function LiveFloor({ api }) {
           <span className="avatar" aria-hidden="true">{initials(p.name)}</span>
           <div style={{ minWidth: 0 }}>
             <div className="n">{p.name}</div>
-            {live && <div className="m">{formatDuration(nowWithOffset(offsetRef.current) - p.started_at)}</div>}
+            {live && (p.break_started_at
+              ? <div className="m break">استراحة · {formatDuration(nowWithOffset(offsetRef.current) - p.break_started_at)}</div>
+              : <div className="m">{formatDuration(nowWithOffset(offsetRef.current) - p.started_at)}</div>)}
           </div>
         </div>
       )) : <div className="hint" style={{ textAlign: "center", padding: "12px 0" }}>لا أحد</div>}

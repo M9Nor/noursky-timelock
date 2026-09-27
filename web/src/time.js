@@ -43,3 +43,8 @@ export function formatStamp(ts, timeZone, { year = true } = {}) {
     return new Intl.DateTimeFormat("en-GB", opts).format(d);
   }
 }
+export function formatBreak(sec) {
+  const s = Number(sec);
+  if (!Number.isFinite(s) || s <= 0) return "";
+  return `${Math.max(1, Math.round(s / 60))} د`;
+}

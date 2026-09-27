@@ -110,4 +110,17 @@ describe("ReportPanel", () => {
     expect(await screen.findByText("مفتوحة")).toBeInTheDocument();
     expect(screen.queryByText(/متأخر/)).not.toBeInTheDocument();
   });
+
+  it("shows each session's break and note in the detail", async () => {
+    const start = Date.UTC(2026, 8, 24, 6, 0) / 1000;
+    const api = makeApi({
+      sessions: [{ id: 1, user_id: "a", started_at: start, ended_at: start + 8 * 3600, closed_by: "user",
+                   late_by_sec: null, break_sec: 30 * 60, note: "أنهيت عرض السعر" }],
+    });
+    wrap(<ReportPanel api={api} />);
+    fireEvent.click(await screen.findByText("أحمد"));
+    expect(await screen.findByText("30 د")).toBeInTheDocument();
+    expect(screen.getByText("أنهيت عرض السعر")).toBeInTheDocument();
+    expect(screen.getByText("الملاحظة")).toBeInTheDocument();
+  });
 });

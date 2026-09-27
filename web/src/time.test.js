@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration, formatHours, serverOffset, formatClock, formatLateness, formatStamp } from "./time.js";
+import { formatDuration, formatHours, serverOffset, formatClock, formatLateness, formatStamp, formatBreak } from "./time.js";
 
 describe("time helpers", () => {
   it("formats duration as H:MM:SS with Western digits", () => {
@@ -74,5 +74,17 @@ describe("formatStamp", () => {
 
   it("returns a dash for a missing timestamp", () => {
     expect(formatStamp(null, "UTC")).toBe("—");
+  });
+});
+
+describe("formatBreak", () => {
+  it("shows whole minutes, never 0 for a real break", () => {
+    expect(formatBreak(20)).toBe("1 د");
+    expect(formatBreak(15 * 60)).toBe("15 د");
+    expect(formatBreak(90 * 60)).toBe("90 د");
+  });
+  it("is empty when there was no break", () => {
+    expect(formatBreak(0)).toBe("");
+    expect(formatBreak(null)).toBe("");
   });
 });

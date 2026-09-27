@@ -19,4 +19,15 @@ describe("LiveFloor", () => {
     expect(screen.getByText("داخل الدوام").closest(".lane").textContent).toContain("أحمد");
     expect(screen.getByText("غير متصل").closest(".lane").textContent).toContain("سارة");
   });
+
+  it("marks an employee who is on a break", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const api = { get: vi.fn(async () => ({
+      server_time: now,
+      employees: [{ user_id: "a", name: "أحمد", session_id: "s1", started_at: now - 3600, break_started_at: now - 300 }],
+    })) };
+    render(<LiveFloor api={api} />);
+    expect(await screen.findByText(/استراحة/)).toBeInTheDocument();
+    expect(screen.getByText("داخل الدوام").closest(".lane").textContent).toContain("أحمد");
+  });
 });
