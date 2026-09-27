@@ -5,6 +5,30 @@ Format: **Date — Decision** · Reason · Alternatives rejected.
 
 ---
 
+### 2026-09-27 — Breaks and note on stop: computed on read, enforced by the server
+- **Worked time is never stored.** `duration_sec` keeps its meaning (wall-clock length);
+  `break_sec` is computed on read and every worked-time sum subtracts breaks clipped to the
+  session and the query window. A manager edit that shortens a session therefore clips its
+  breaks automatically; a break left open on a closed session is ended at the session end
+  by `autoCloseStale`.
+- **One open break per session** is a DB constraint (`open_flag` + UNIQUE), same pattern as
+  sessions. Break start/stop use a transaction and lock the session row first (same lock
+  order as `/session/stop`).
+- **A break can always be ended**, even after the manager disables breaks — otherwise an
+  employee could be stuck mid-break.
+- **Note policy is enforced by the server** (`400 NOTE_REQUIRED`, session stays open); the
+  UI's copy of the policy is a convenience and self-corrects on that error. With the
+  policy `off` a sent note is discarded, not stored.
+- **CSV cells starting with = + - @ tab CR are prefixed with `'`** — notes are employee
+  free text and would otherwise run as Excel formulas.
+- **Employee live totals extrapolate from `server_time`** (server numbers are exact at
+  that instant; the client adds only the seconds since, and nothing during a break). The
+  old formula added the full session again on top of `worked_sec`.
+- **Rejected:** storing worked seconds on the session (goes stale on every manager edit
+  and every break); a separate `break_sec` column maintained by triggers or app code
+  (two sources of truth); a UI-only required note (bypassable, and a stale policy would
+  silently let stops through).
+
 ### 2026-09-27 — Local days use the offset in force on each date (DST-safe)
 Report `late_days`/`days_present` and the per-session `late_by_sec` map every timestamp
 with the UTC offset in force at that instant. `src/tz.js` finds the offset changes inside

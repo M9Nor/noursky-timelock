@@ -4,22 +4,24 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `main` · **Last deploy:** `2fab666` live at `https://timeclock.noursky.com`
-  (bundle `index-C6aTDy2o.js`, `/health` ok). The `late_grace_minutes` migration has
-  been applied to the production DB.
-- **Works:** Backend API (auth/SSO via the private GHL Marketplace app, sessions,
-  admin report/live/sessions/settings, CSV export, auto-close). React frontend (light
-  theme, RTL): employee hero clock + "سجلّي — آخر 7 أيام" history with the account's
-  real daily target; manager dashboard (KPIs, live floor, report with custom range +
-  search + CSV, session edit modal, settings). **Attendance policies phase 1 is live:**
-  per-account `late_grace_minutes` (0–240), "أيام التأخير" per employee, and — new —
-  a "التأخير" column in the employee session drill-down (`متأخر 5 س 37 د`) driven by
-  `late_by_sec` from `GET /admin/sessions`; drill-down times now render in the
-  location timezone. Verified live inside GHL (Innova): the 3 late days match the
-  count. 54/54 frontend tests, 38/38 smoke checks locally.
-- **Not done / known minors:** none open from phase 1. Local-day math is DST-safe
-  (`src/tz.js`), `tzOffsetSec` is exact, and schema upgrades now live in `migrations/`.
-  "سجلّي" renders in the company timezone and production test rows were removed.
+- **Branch:** `feature/attendance-policies-phase2` — complete, reviewed, **not yet merged**.
+  `main` (live) is still phase 1 + the DST fix. **Merge is gated on applying
+  `migrations/002_breaks_and_notes.sql` to production first** (every worked-time query
+  now reads `breaks`; `/health` would stay green while `/me/status` and `/admin/report`
+  return 500).
+- **Works (on the branch):** everything from phase 1, plus manager-controlled **breaks**
+  (pause counting without ending the session; one open break per session enforced by the
+  DB; a break can always be ended) and a **note on stop** policy (off / optional /
+  required, enforced server-side, max 500). Worked time = duration − breaks, computed on
+  read and clipped to session and window. Shown in: employee screen (break button, frozen
+  clock, note dialog), settings, manager session detail (break + note columns), live floor
+  (on-break state), employee history (hours without breaks), CSV (Hours = worked, Break
+  (min), Note; formula-injection guard). Also fixed: the employee screen double-counted a
+  session already running when the page opened.
+- **Tests:** 80/80 frontend, 66/66 smoke (local MariaDB 11), 8/8 unit; build ok.
+- **Known minors (parked, see DECISIONS / the phase-2 ledger):** Escape during an in-flight
+  stop can hide a failure; `BREAK_ALREADY_OPEN` shows the generic message; no Tab focus
+  trap in the note dialog; correlated subquery inside `SUM()` untested on MySQL 8.
 
 ## In Progress
 - Nothing mid-flight. The frontend redesign (spec `docs/superpowers/specs/2026-09-19-frontend-redesign-design.md`,
@@ -74,6 +76,17 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-09-27** · Attendance policies **phase 2** on `feature/attendance-policies-phase2`
+  (plan `docs/superpowers/plans/2026-09-27-attendance-policies-phase2.md`, subagent-driven,
+  6 tasks + final review). Migration 002 (`breaks` table, `sessions.note`,
+  `settings.breaks_enabled`, `settings.note_on_stop`); break start/stop endpoints with
+  transaction + FOR UPDATE; worked-time SQL subtracts clipped breaks; `/session/stop`
+  enforces the note policy; CSV adds Break (min) + Note with a formula guard; UI for
+  employee, settings, manager detail, live floor, history. Final review fix wave: dialog
+  shows stop errors and refreshes on NO_OPEN_SESSION, null-JSON-body hardening, break/stop
+  locks session first, `(location_id, ended_at)` breaks index, PROJECT.md/CLAUDE.md
+  updated. 80/80 frontend, 66/66 smoke, 8/8 unit. Not merged — waiting on production
+  migration 002.
 - **2026-09-27** · Closed the three phase-1 minors. (1) `tzOffsetSec` truncates to whole
   seconds itself (was 1s short with a millisecond Date); call-site workaround removed.
   (2) DST: report `late_days`/`days_present` and `/admin/sessions` `late_by_sec` now use
