@@ -501,6 +501,39 @@ if (fxNowLocal >= 120 && fxNowLocal < 23 * 3600) {
   console.log("  SKIP  live fixed-window checks (too close to local midnight)");
 }
 
+// A manager edit records only windows the NEW bounds newly cover, not ones already
+// coverable under the old bounds — a later-added fixed policy must not silently rewrite
+// a day a prior edit already fixed up under a different (e.g. off) policy.
+await fxPolicy({ break_mode: "off" });
+const fxOldOpen = await call(FE, "POST", "/session/start");
+await call(FE, "POST", "/session/stop");
+const fxOldId = fxOldOpen.body?.id;
+const fxOldDay = fxMidnight - 2 * 86400;
+await call(FM, "PATCH", `/admin/sessions/${fxOldId}`,
+  { started_at: fxOldDay + 9 * 3600, ended_at: fxOldDay + 17 * 3600, reason: "تعديل قبل تفعيل النافذة" });
+await fxPolicy({ break_mode: "fixed", break_start: "13:00", break_end: "14:00", break_paid: false });
+await call(FM, "PATCH", `/admin/sessions/${fxOldId}`,
+  { started_at: fxOldDay + 9 * 3600, ended_at: fxOldDay + 17 * 3600 + 5 * 60, reason: "تصحيح بسيط لوقت الانتهاء" });
+const fxOldRange = `from=${fxOldDay + 9 * 3600}&to=${fxOldDay + 17 * 3600 + 5 * 60}`;
+const fxOldRows = await call(FM, "GET", `/admin/sessions?${fxOldRange}&user_id=${FXLOC}-u1`);
+check("an edit that already covered a window under the old policy does not re-record it",
+  fxOldRows.body?.sessions?.find((x) => x.id === fxOldId)?.break_sec === 0,
+  `(${JSON.stringify(fxOldRows.body?.sessions?.map((x) => x.break_sec))})`);
+
+const fxNewOpen = await call(FE, "POST", "/session/start");
+await call(FE, "POST", "/session/stop");
+const fxNewId = fxNewOpen.body?.id;
+const fxNewDay = fxMidnight - 3 * 86400;
+await call(FM, "PATCH", `/admin/sessions/${fxNewId}`,
+  { started_at: fxNewDay + 9 * 3600, ended_at: fxNewDay + 12 * 3600, reason: "جلسة صباحية لا تغطي النافذة" });
+await call(FM, "PATCH", `/admin/sessions/${fxNewId}`,
+  { started_at: fxNewDay + 9 * 3600, ended_at: fxNewDay + 17 * 3600, reason: "تمديد الجلسة ليغطي النافذة" });
+const fxNewRange = `from=${fxNewDay + 9 * 3600}&to=${fxNewDay + 17 * 3600}`;
+const fxNewRows = await call(FM, "GET", `/admin/sessions?${fxNewRange}&user_id=${FXLOC}-u1`);
+check("an edit that newly covers a window records it",
+  fxNewRows.body?.sessions?.find((x) => x.id === fxNewId)?.break_sec === 3600,
+  `(${JSON.stringify(fxNewRows.body?.sessions?.map((x) => x.break_sec))})`);
+
 await cleanupLocation(FXLOC);
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);

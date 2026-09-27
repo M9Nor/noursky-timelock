@@ -167,14 +167,23 @@ function todayFixedBreak(st, t) {
  * begun for a session, so every worked-time query deducts them like any other break and
  * a later policy change never rewrites a recorded day. Rows hold the whole window; reads
  * clip it to the session. INSERT IGNORE on ux_fixed_window makes this idempotent.
+ *
+ * `exec` runs the INSERT (defaults to the pool via `q`; a manager edit passes the
+ * transaction's `conn.execute` so the edit and its recorded windows commit atomically).
+ * `except`, when given, is the session's bounds *before* the edit — a window that already
+ * overlapped them was recordable under the old bounds too, so it is skipped here rather
+ * than re-recorded under whatever policy happens to be live today.
  */
-async function recordFixedBreaks(session, st, t) {
+async function recordFixedBreaks(session, st, t, { exec = q, except = null } = {}) {
   if (st?.break_mode !== "fixed" || st.break_paid || !st.break_start || !st.break_end) return;
   const start = Number(session.started_at);
   const until = session.ended_at == null ? t : Math.min(Number(session.ended_at), t);
+  const exStart = except ? Number(except.started_at) : null;
+  const exEnd = except ? (except.ended_at == null ? t : Number(except.ended_at)) : null;
   for (const [ws, we] of fixedWindows(st.timezone, start, until, st.break_start, st.break_end)) {
     if (ws > t || we <= start || ws >= until) continue;
-    await q(
+    if (except && ws < exEnd && we > exStart) continue; // already coverable under the old bounds
+    await exec(
       `INSERT IGNORE INTO breaks (id, session_id, location_id, kind, started_at, ended_at)
        VALUES (:id, :sid, :loc, 'fixed', :ws, :we)`,
       { id: randomUUID(), sid: session.id, loc: session.location_id, ws, we }
@@ -696,6 +705,7 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
   if (!reason) throw new HttpError(400, "REASON_REQUIRED");
   const s = body.started_at, e = body.ended_at;
   if (!Number.isInteger(s) || !Number.isInteger(e) || e <= s || e > now()) throw new HttpError(400, "INVALID_TIMES");
+  const st = await getSettings(loc);
 
   const conn = await pool.getConnection();
   try {
@@ -716,9 +726,13 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
        VALUES (:lid, :id, :loc, :editor, :os, :oe, :s, :e, :reason, :t)`,
       { lid: randomUUID(), id, loc, editor, os: old.started_at, oe: old.ended_at, s, e, reason: reason.slice(0, 500), t: now() }
     );
+    // The new bounds may now cover a fixed window the old bounds didn't; record only
+    // that, atomically with the edit — never a window already coverable before the edit.
+    await recordFixedBreaks(
+      { id, location_id: loc, started_at: s, ended_at: e }, st, now(),
+      { exec: (sql, p) => conn.execute(sql, p), except: { started_at: old.started_at, ended_at: old.ended_at } }
+    );
     await conn.commit();
-    // The edited bounds may now cover a fixed window; record it under the current policy.
-    await recordFixedBreaks({ id, location_id: loc, started_at: s, ended_at: e }, await getSettings(loc), now());
     return c.json({ id, started_at: s, ended_at: e, duration_sec: e - s, closed_by: "admin" });
   } catch (err) {
     await conn.rollback().catch(() => {});
