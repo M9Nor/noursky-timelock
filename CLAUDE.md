@@ -26,7 +26,7 @@ MySQL/MariaDB database, deployed on **Hostinger Cloud (managed Node.js)** at
 ```
 src/server.js            # entire backend API (Hono + mysql2): auth/SSO, sessions, admin, static serving
 src/tz.js                # timezone math: per-date offsets (DST-safe), local-day SQL expressions
-schema.sql               # DB schema (4 tables) — run once via phpMyAdmin import
+schema.sql               # DB schema (5 tables) — run once via phpMyAdmin import
 migrations/              # numbered upgrade scripts for existing DBs (see migrations/README.md)
 scripts/smoke-test.mjs   # end-to-end backend smoke test (simulates GHL SSO)
 scripts/build-web.mjs    # postinstall/build: installs web/ dev deps + vite build → public/
@@ -37,7 +37,8 @@ web/                     # React + Vite SPA (source of the UI)
   src/time.js            # server-time offset + duration/clock formatting (Western digits)
   src/styles.css         # NourSky design system (light theme, class-based)
   src/components/        # Icon, Button, Toast, TopBar, EmployeeScreen, KpiRow, LiveFloor,
-                         #   ReportPanel, SessionEditModal, SettingsPanel, ManagerDashboard
+                         #   ReportPanel, SessionEditModal, SettingsPanel, ManagerDashboard,
+                         #   StopNoteDialog, MyHistory
 public/                  # Vite build output (gitignored; produced at deploy)
 docs/                    # PROGRESS.md, DECISIONS.md, specs/, plans/, design-reference.html
 archive/cloudflare-worker/  # reference only — never edit or deploy
