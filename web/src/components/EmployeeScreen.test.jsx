@@ -257,4 +257,14 @@ describe("EmployeeScreen", () => {
     wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
     expect(await screen.findByRole("button", { name: /^استراحة$/ })).toBeInTheDocument();
   });
+  it("re-fetches its totals when the local day ends", async () => {
+    const t = nowSec();
+    // The day ends one second from now; the screen must reload so "today" starts over.
+    const api = makeApi({ open_session: null, open_break: null, worked_sec: 7200, server_time: t, day_ends_at: t + 1 });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    await screen.findByRole("button", { name: /بدء الدوام/ });
+    const statusCalls = () => api.get.mock.calls.filter(([p]) => p === "/me/status").length;
+    expect(statusCalls()).toBe(1);
+    await waitFor(() => expect(statusCalls()).toBe(2), { timeout: 4000 });
+  });
 });

@@ -629,6 +629,41 @@ if (await setPolicySince(FXLOC, fxMidnight - 5 * 86400)) {
 
 await cleanupLocation(FXLOC);
 
+// --- "Today" on the employee screen is the location's calendar day, not the last 24 hours.
+// Riyadh (UTC+3, no DST). A session that ended before local midnight is within the last
+// 24h but belongs to yesterday, so today's worked_sec must not include it.
+const TDLOC = `${LOC}-td`;
+const tdMgr = await sso({ userId: `${TDLOC}-m1`, role: "admin", type: "account", activeLocation: TDLOC, userName: "مدير اليوم", email: "tdm@x.com" });
+const tdEmp = await sso({ userId: `${TDLOC}-u1`, role: "user", type: "account", activeLocation: TDLOC, userName: "موظف اليوم", email: "tde@x.com" });
+const TDM = tdMgr.body?.token, TDE = tdEmp.body?.token;
+await call(TDM, "PUT", "/admin/settings", { timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: null, late_grace_minutes: 15, note_on_stop: "off" });
+const tdNow = Math.floor(Date.now() / 1000);
+const tdMidnight = Math.floor((tdNow + 3 * 3600) / 86400) * 86400 - 3 * 3600; // today 00:00 Riyadh
+const tdOpen = await call(TDE, "POST", "/session/start");
+await call(TDE, "POST", "/session/stop");
+await call(TDM, "PATCH", `/admin/sessions/${tdOpen.body?.id}`,
+  { started_at: tdMidnight - 2 * 3600, ended_at: tdMidnight - 3600, reason: "جلسة مساء أمس للاختبار" });
+const tdStatus = await call(TDE, "GET", "/me/status");
+check("today's total excludes yesterday evening's session",
+  tdStatus.status === 200 && tdStatus.body?.worked_sec === 0, `(worked_sec ${JSON.stringify(tdStatus.body?.worked_sec)})`);
+check("status says when today ends (next local midnight)",
+  tdStatus.body?.day_ends_at === tdMidnight + 86400, `(${JSON.stringify(tdStatus.body?.day_ends_at)} vs ${tdMidnight + 86400})`);
+// A session across midnight counts only its part after midnight (the edited end must be in
+// the past, so the after-midnight part is up to 20 min, capped by the current local time).
+const tdAfter = Math.min(1200, tdNow - tdMidnight - 60);
+if (tdAfter > 0) {
+  const tdCross = await call(TDE, "POST", "/session/start");
+  await call(TDE, "POST", "/session/stop");
+  await call(TDM, "PATCH", `/admin/sessions/${tdCross.body?.id}`,
+    { started_at: tdMidnight - 1800, ended_at: tdMidnight + tdAfter, reason: "جلسة عبر منتصف الليل للاختبار" });
+  const tdCrossStatus = await call(TDE, "GET", "/me/status");
+  check("a session across midnight counts only its part after midnight",
+    tdCrossStatus.body?.worked_sec === tdAfter, `(worked_sec ${JSON.stringify(tdCrossStatus.body?.worked_sec)}, expected ${tdAfter})`);
+} else {
+  console.log("  SKIP  across-midnight today check (less than a minute past local midnight)");
+}
+await cleanupLocation(TDLOC);
+
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
 
 // --- dev-login (only meaningful when the target server runs with NODE_ENV != production) ---

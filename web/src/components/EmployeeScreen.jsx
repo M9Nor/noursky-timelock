@@ -63,6 +63,15 @@ export default function EmployeeScreen({ api, user }) {
     return () => clearInterval(id);
   }, []);
 
+  // "Today" starts over at local midnight: reload then, so the totals and today's fixed
+  // window belong to the new day instead of extrapolating yesterday's.
+  useEffect(() => {
+    if (!status?.day_ends_at) return undefined;
+    const ms = Math.max(0, status.day_ends_at - nowWithOffset(offsetRef.current)) * 1000 + 1000;
+    const id = setTimeout(() => refresh().catch(() => {}), ms);
+    return () => clearTimeout(id);
+  }, [status?.day_ends_at]);
+
   // `dialog: true` routes errors into the note dialog's own `.err` span (via noteError)
   // instead of the page banner behind it, since the dialog overlay hides the banner.
   async function run(action, message, { dialog = false } = {}) {

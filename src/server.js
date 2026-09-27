@@ -350,7 +350,11 @@ app.get("/me/status", authed, async (c) => {
   const { uid, loc } = c.get("claims");
   await autoCloseStale(loc);
   const t = now();
-  const from = intParam(c, "since", t - 86400);
+  const st = await getSettings(loc);
+  // "Today" is the location's calendar day, not the last 24 hours: an evening shift must
+  // not show up in the next morning's total.
+  const [dayStart, dayEnd] = localDayBounds(st?.timezone ?? "Asia/Riyadh", t);
+  const from = intParam(c, "since", dayStart);
 
   const open = await q(
     `SELECT s.id, s.started_at, ${BREAK_SEC_EXPR} AS break_sec
@@ -368,12 +372,10 @@ app.get("/me/status", authed, async (c) => {
         AND s.started_at < :to AND (s.ended_at IS NULL OR s.ended_at > :from)`,
     { now: t, to: t, from, uid, loc }
   );
-  const st = await getSettings(loc);
   let fixedBreak = todayFixedBreak(st, t);
   if (open.length && st) {
     // The window actually deducted today is the one recorded first (one per day), which
     // differs from today's policy window when the manager moved it after it was recorded.
-    const [dayStart, dayEnd] = localDayBounds(st.timezone, t);
     const [rec] = await q(
       `SELECT started_at, ended_at FROM breaks
         WHERE session_id = :sid AND kind = 'fixed' AND started_at >= :dayStart AND started_at < :dayEnd
@@ -389,6 +391,8 @@ app.get("/me/status", authed, async (c) => {
     open_break: brk[0] ? { id: brk[0].id, started_at: Number(brk[0].started_at) } : null,
     worked_sec: Number(total[0].worked_sec),
     fixed_break: fixedBreak,
+    // Lets the screen refresh at local midnight, when "today" starts over.
+    day_ends_at: dayEnd,
     server_time: t,
   });
 });
