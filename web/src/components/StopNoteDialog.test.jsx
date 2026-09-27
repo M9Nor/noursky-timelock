@@ -22,4 +22,25 @@ describe("StopNoteDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "تأكيد الإنهاء" }));
     expect(onConfirm).toHaveBeenLastCalledWith("أنهيت العرض");
   });
+
+  it("moves focus into the note field on open", () => {
+    render(<StopNoteDialog required={false} onConfirm={() => {}} onCancel={() => {}} />);
+    expect(screen.getByLabelText("ملاحظة")).toHaveFocus();
+  });
+
+  it("closes on Escape", () => {
+    const onCancel = vi.fn();
+    render(<StopNoteDialog required={false} onConfirm={() => {}} onCancel={onCancel} />);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it("links the required-note error to the textarea via aria-describedby", () => {
+    render(<StopNoteDialog required onConfirm={() => {}} onCancel={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "تأكيد الإنهاء" }));
+    const textarea = screen.getByLabelText("ملاحظة");
+    const describedBy = textarea.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy).textContent).toBe("الملاحظة مطلوبة لإنهاء الدوام");
+  });
 });
