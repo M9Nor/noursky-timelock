@@ -4,12 +4,9 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `feature/attendance-policies-phase2` — complete, reviewed, **not yet merged**.
-  `main` (live) is still phase 1 + the DST fix. **Merge is gated on applying
-  `migrations/002_breaks_and_notes.sql` to production first** (every worked-time query
-  now reads `breaks`; `/health` would stay green while `/me/status` and `/admin/report`
-  return 500).
-- **Works (on the branch):** everything from phase 1, plus manager-controlled **breaks**
+- **Branch:** `main` — phase 2 merged and deployed. Migration 002 was applied to
+  production on 2026-09-27 before the push (every worked-time query reads `breaks`).
+- **Works:** everything from phase 1, plus manager-controlled **breaks**
   (pause counting without ending the session; one open break per session enforced by the
   DB; a break can always be ended) and a **note on stop** policy (off / optional /
   required, enforced server-side, max 500). Worked time = duration − breaks, computed on
@@ -85,8 +82,8 @@ _(append-only, newest on top: date · summary · files · commit)_
   employee, settings, manager detail, live floor, history. Final review fix wave: dialog
   shows stop errors and refreshes on NO_OPEN_SESSION, null-JSON-body hardening, break/stop
   locks session first, `(location_id, ended_at)` breaks index, PROJECT.md/CLAUDE.md
-  updated. 80/80 frontend, 66/66 smoke, 8/8 unit. Not merged — waiting on production
-  migration 002.
+  updated. 80/80 frontend, 66/66 smoke, 8/8 unit. Migration 002 applied in production
+  (phpMyAdmin) on 2026-09-27, then merged to `main` and pushed.
 - **2026-09-27** · Closed the three phase-1 minors. (1) `tzOffsetSec` truncates to whole
   seconds itself (was 1s short with a millisecond Date); call-site workaround removed.
   (2) DST: report `late_days`/`days_present` and `/admin/sessions` `late_by_sec` now use
