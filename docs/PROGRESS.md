@@ -17,8 +17,7 @@ _(overwrite each update)_
   MySQL 8); build ok.
 - **Known minors (parked):** one-per-day is per session, not per employee; `/admin/live`
   shows the policy window rather than each employee's recorded one after a same-day move;
-  flexible→fixed switch mid-break can overlap once; employee screen doesn't re-poll past
-  midnight.
+  flexible→fixed switch mid-break can overlap once.
 
 ## In Progress
 - Nothing mid-flight. The frontend redesign (spec `docs/superpowers/specs/2026-09-19-frontend-redesign-design.md`,
@@ -73,6 +72,11 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-09-28** · "مجموع اليوم" on the employee screen is now the location's calendar
+  day: `/me/status` defaults `since` to local midnight (`localDayBounds`), a session across
+  midnight counts only its after-midnight part, and the response carries `day_ends_at` so
+  an open screen reloads at midnight. Weekly total unchanged (rolling 7 days). Smoke 96,
+  frontend 91, unit 15. Parked: the midnight reload doesn't retry if that one fetch fails.
 - **2026-09-28** · **Break modes** on `feature/break-modes` (plan
   `docs/superpowers/plans/2026-09-27-break-modes.md`, spec §5.4b, subagent-driven, 5 tasks
   + final review). Migration 003 (`settings.break_mode/break_start/break_end/break_paid/
