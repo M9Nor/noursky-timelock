@@ -1,6 +1,7 @@
 const PATHS = {
   play: <path d="M7 5v14l11-7z" />,
   stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
+  pause: <><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></>,
   search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>,
   download: <path d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14" />,
   plus: <path d="M12 5v14M5 12h14" />,
