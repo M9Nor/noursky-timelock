@@ -222,7 +222,7 @@ async function issueSession({ userId, loc, role, name, email }) {
 /* ---------- Auth ---------- */
 
 app.post("/auth/sso", async (c) => {
-  const { encryptedData } = await c.req.json().catch(() => ({}));
+  const { encryptedData } = (await c.req.json().catch(() => null)) ?? {};
   if (!encryptedData) throw new HttpError(400, "MISSING_ENCRYPTED_DATA");
 
   const d = decryptSSO(encryptedData, env.GHL_SHARED_SECRET);
@@ -240,7 +240,7 @@ app.post("/auth/sso", async (c) => {
 // real clients use the app — while it is on, anyone with the URL can sign in.
 app.post("/auth/dev-login", async (c) => {
   if (env.NODE_ENV === "production" && env.PREVIEW_MODE !== "1") throw new HttpError(404, "DEV_LOGIN_DISABLED");
-  const { role } = await c.req.json().catch(() => ({}));
+  const { role } = (await c.req.json().catch(() => null)) ?? {};
   const isMgr = role === "manager";
   return c.json(await issueSession({
     userId: isMgr ? "dev-manager" : "dev-employee",
@@ -375,15 +375,19 @@ app.post("/session/break/stop", authed, async (c) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    // Lock the open break (joined to its open session) so a double-tap or a race with
-    // /session/stop cannot both find it open and both report success.
-    const [rows] = await conn.execute(
-      `SELECT b.id, b.started_at
-         FROM breaks b
-         JOIN sessions s ON s.id = b.session_id
-        WHERE s.user_id = :uid AND s.location_id = :loc AND s.ended_at IS NULL AND b.ended_at IS NULL
-        FOR UPDATE`,
+    // Lock the open session first, in the same order as /session/stop, so the two
+    // routes can never deadlock by locking sessions and breaks in opposite orders.
+    const [sessionRows] = await conn.execute(
+      "SELECT id FROM sessions WHERE user_id = :uid AND location_id = :loc AND ended_at IS NULL FOR UPDATE",
       { uid, loc }
+    );
+    if (!sessionRows.length) throw new HttpError(409, "NO_OPEN_BREAK");
+    const sessionId = sessionRows[0].id;
+    // Lock the open break on that session so a double-tap or a race with /session/stop
+    // cannot both find it open and both report success.
+    const [rows] = await conn.execute(
+      "SELECT id, started_at FROM breaks WHERE session_id = :sid AND ended_at IS NULL FOR UPDATE",
+      { sid: sessionId }
     );
     if (!rows.length) throw new HttpError(409, "NO_OPEN_BREAK");
     const b = rows[0];
@@ -405,7 +409,7 @@ const NOTE_MAX = 500;
 app.post("/session/stop", authed, async (c) => {
   const { uid, loc } = c.get("claims");
   await autoCloseStale(loc);
-  const body = await c.req.json().catch(() => ({}));
+  const body = (await c.req.json().catch(() => null)) ?? {};
   const rawNote = typeof body.note === "string" ? body.note.trim() : "";
   if (rawNote.length > NOTE_MAX) throw new HttpError(400, "NOTE_TOO_LONG");
   const policy = (await getSettings(loc))?.note_on_stop ?? "off";
@@ -628,7 +632,7 @@ app.get("/admin/sessions", authed, managerOnly, async (c) => {
 app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
   const { loc, uid: editor } = c.get("claims");
   const id = c.req.param("id");
-  const body = await c.req.json().catch(() => ({}));
+  const body = (await c.req.json().catch(() => null)) ?? {};
   const reason = String(body.reason ?? "").trim();
   if (!reason) throw new HttpError(400, "REASON_REQUIRED");
   const s = body.started_at, e = body.ended_at;
@@ -689,11 +693,18 @@ app.get("/admin/export.csv", authed, managerOnly, async (c) => {
     const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
     return `"${safe.replace(/"/g, '""')}"`;
   };
+  // Same rounding rule as the UI's formatBreak: 0 with no break, otherwise at least 1
+  // minute, so a short break (e.g. 20s) doesn't silently round down to 0 here while the
+  // UI shows "1 د".
+  const breakMin = (sec) => {
+    const s = Number(sec);
+    return s > 0 ? Math.max(1, Math.round(s / 60)) : 0;
+  };
   const lines = [
     ["Employee", "Email", "Start", "End", "Hours", "Break (min)", "Closed by", "Note"],
     ...rows.map((r) => [r.name, r.email, fmt(r.started_at), fmt(r.ended_at),
       r.duration_sec ? ((Number(r.duration_sec) - Number(r.break_sec)) / 3600).toFixed(2) : "",
-      Math.round(Number(r.break_sec) / 60), r.closed_by ?? "open", r.note ?? ""]),
+      breakMin(r.break_sec), r.closed_by ?? "open", r.note ?? ""]),
   ];
   const csv = "\uFEFF" + lines.map((l) => l.map(esc).join(",")).join("\r\n"); // BOM → Excel reads Arabic
   return c.body(csv, 200, {
@@ -708,7 +719,7 @@ app.get("/admin/settings", authed, managerOnly, async (c) => {
 
 app.put("/admin/settings", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
-  const b = await c.req.json().catch(() => ({}));
+  const b = (await c.req.json().catch(() => null)) ?? {};
   try { new Intl.DateTimeFormat("en", { timeZone: b.timezone }); } catch { throw new HttpError(400, "INVALID_TIMEZONE"); }
   if (!b.timezone) throw new HttpError(400, "INVALID_TIMEZONE");
   const target = Number(b.daily_target_hours), max = Number(b.max_session_hours);

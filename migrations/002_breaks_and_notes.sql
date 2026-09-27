@@ -21,5 +21,7 @@ CREATE TABLE IF NOT EXISTS breaks (
   open_flag   TINYINT GENERATED ALWAYS AS (IF(ended_at IS NULL, 1, NULL)) STORED,
   UNIQUE KEY ux_one_open_break (session_id, open_flag),
   KEY ix_breaks_session (session_id),
-  KEY ix_breaks_loc (location_id)
+  -- Covers autoCloseStale's per-location "close still-open breaks" UPDATE, which
+  -- filters on (location_id, ended_at IS NULL) on every request.
+  KEY ix_breaks_loc_open (location_id, ended_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
