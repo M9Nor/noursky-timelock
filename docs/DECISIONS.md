@@ -5,6 +5,26 @@ Format: **Date — Decision** · Reason · Alternatives rejected.
 
 ---
 
+### 2026-09-29 — Activity from GHL is evidence and alerts, never the clock
+Owner wanted attendance driven by GHL activity (audit logs). Decision: manual start/stop
+stays the record of truth; activity only raises in-app alerts and marks sessions for the
+manager to review — nothing is started, stopped or deducted automatically.
+- **Source: official webhooks** (`OutboundMessage` carries `userId`), via our Marketplace
+  app with a read-only scope. **Rejected:** GHL Audit Logs (no public API or scope; the
+  internal endpoint the GHL UI uses is undocumented and unstable), polling the API.
+- **In-app alerts only.** Rejected GHL workflow Inbound Webhook alerts (premium trigger,
+  per-execution cost; owner wants zero cost).
+- **Privacy:** metadata only (who, when, kind, message type, source) — never content; raw
+  rows deleted after 90 days; per-session summaries and alerts kept.
+- **A GHL signature proves origin, not recipient:** GHL signs every Marketplace app's
+  webhooks with one Ed25519 key, so install/uninstall must match `GHL_APP_ID` and activity
+  is deduped on `messageId`.
+- **Test signing key** is committed on purpose and accepted only when `NODE_ENV` is
+  development/test (fail closed).
+- **Alert uniqueness** uses numeric generated flags + composite UNIQUE keys
+  (`idle_open_flag`, `nci_open_flag`): MariaDB 11.8 rejects STORED generated columns with
+  a string IF result (ERROR 1901).
+
 ### 2026-09-28 — Break modes: fixed windows are recorded, not computed
 Breaks became one setting, `break_mode` = off / fixed / flexible (owner-approved). An unpaid
 fixed window is written as a `breaks` row (`kind='fixed'`) once it begins for an open

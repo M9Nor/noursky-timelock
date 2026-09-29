@@ -4,20 +4,24 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `main` — break modes merged and deployed. Migration 003 applied to production
-  on 2026-09-28 right before the push (Innova's flexible breaks mapped to `break_mode = flexible`).
-- **Works:** phase 2, plus a manager `break_mode` setting:
-  `off` / `fixed` (daily HH:MM window in the location timezone, paid or unpaid, no button)
-  / `flexible` (the employee button). Unpaid fixed windows are recorded as `breaks` rows
-  (`kind='fixed'`) — at most one per session per local day, only for windows starting
-  after the policy was saved (`break_policy_since`) — so reports, detail, CSV and history
-  deduct them and past days never change. Employee screen and live floor show today's
-  window; the live clock pauses during an unpaid one (`liveTotals()` in `web/src/time.js`).
-- **Tests:** unit 15/15, frontend 90/90, smoke 93/93 (local MariaDB 11; SQL also checked on
-  MySQL 8); build ok.
-- **Known minors (parked):** one-per-day is per session, not per employee; `/admin/live`
-  shows the policy window rather than each employee's recorded one after a same-day move;
-  flexible→fixed switch mid-break can overlap once.
+- **Branch:** `feature/activity-monitoring-a` — activity monitoring **phase A** complete and
+  reviewed, **not yet merged**. `main` (live) has everything up to break modes + the
+  calendar-day "today" total. **Merge is gated on applying
+  `migrations/004_activity_monitoring.sql` to production first** (quiet hour).
+- **Phase A on the branch:** GHL OAuth install callback (tokens stored AES-256-GCM
+  encrypted), `POST /ghl/webhook` (Ed25519 `X-GHL-Signature`, 256 KB streaming limit,
+  `GHL_APP_ID` filter on install/uninstall, dedupe on `messageId`), activity metadata only
+  (who / when / kind / type / source — never content) for locations with
+  `activity_monitoring = 1`, 90-day retention, `GET /admin/ghl-connection`, settings
+  toggle + idle threshold + connection status. Test signing key accepted only when
+  `NODE_ENV` is development/test.
+- **Next:** deploy phase A → owner configures the Marketplace app (scope
+  `conversations/message.readonly`, webhook URL, redirect URL) and Hostinger env
+  (`GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `TOKEN_ENC_KEY`, `GHL_APP_ID`) → reinstall on
+  Innova → verify what arrives (automated-message marker, mobile messages) → phase B
+  (detection, alerts, UI).
+- **Tests:** unit 40, frontend 99, smoke 117 local (118 with `GHL_APP_ID=test-app`),
+  108/0 in production mode; build ok.
 
 ## In Progress
 - Nothing mid-flight. The frontend redesign (spec `docs/superpowers/specs/2026-09-19-frontend-redesign-design.md`,
@@ -72,6 +76,16 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-09-29** · Activity monitoring **phase A** on `feature/activity-monitoring-a`
+  (spec `docs/superpowers/specs/2026-09-29-activity-monitoring-design.md`, plan
+  `…-phase-a.md`, subagent-driven, 5 tasks + final review). Research first: GHL has **no
+  public Audit Logs API** — owner approved official webhooks as *evidence and alerts only*,
+  in-app only (no paid workflow triggers). Migration 004 (all phase A+B tables; alert
+  uniqueness via numeric `*_open_flag` columns because MariaDB 11.8 rejects string STORED
+  generated columns — verified end to end on MariaDB 11.8.9 and MySQL 8.0.46). Review
+  fixes: streaming body limit, key checked before the one-time code is exchanged,
+  production-aware smoke, and the discovery that GHL signs **every** app's webhooks with
+  one key → `GHL_APP_ID` filter + `messageId` dedupe. Not merged — waiting on migration 004.
 - **2026-09-28** · "مجموع اليوم" on the employee screen is now the location's calendar
   day: `/me/status` defaults `since` to local midnight (`localDayBounds`), a session across
   midnight counts only its after-midnight part, and the response carries `day_ends_at` so
