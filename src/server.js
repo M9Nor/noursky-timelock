@@ -10,6 +10,7 @@ import { cors } from "hono/cors";
 import mysql from "mysql2/promise";
 import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { localZone, localDate, wallToUtc, fixedWindows, localDayBounds } from "./tz.js";
+import { verifyGhlSignature, parseWebhook } from "./ghlWebhook.js";
 
 /* ------------------------------------------------------------------ */
 /* Config                                                              */
@@ -861,6 +862,7 @@ app.get("/admin/settings", authed, managerOnly, async (c) => {
 const ACTIVITY_SCOPE = "conversations/message.readonly";
 
 app.get("/admin/ghl-connection", authed, managerOnly, async (c) => {
+  await purgeOldActivity();
   const { loc } = c.get("claims");
   const [row] = await q(
     "SELECT scopes, installed_at, uninstalled_at, last_event_at FROM ghl_installs WHERE location_id = :loc",
@@ -953,6 +955,74 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   return c.json(await getSettings(loc));
 });
 
+/* ---------- GHL (called by GHL, not by a signed-in user) ---------- */
+
+const ACTIVITY_RETENTION_SEC = 90 * 86400;
+const WEBHOOK_MAX_BYTES = 256 * 1024;
+
+/** Raw activity rows are metadata kept for 90 days; summaries and alerts stay (spec §4). */
+async function purgeOldActivity() {
+  await q("DELETE FROM activity_events WHERE occurred_at < :cutoff", { cutoff: now() - ACTIVITY_RETENTION_SEC });
+}
+
+app.post("/ghl/webhook", async (c) => {
+  const raw = await c.req.text();
+  if (Buffer.byteLength(raw, "utf8") > WEBHOOK_MAX_BYTES) throw new HttpError(413, "PAYLOAD_TOO_LARGE");
+  // The signature is the only authentication this route has. The test key is honoured
+  // only outside production, like dev-login.
+  const allowTestKey = env.NODE_ENV !== "production";
+  if (!verifyGhlSignature(raw, c.req.header("x-ghl-signature"), { allowTestKey })) {
+    throw new HttpError(401, "WEBHOOK_BAD_SIGNATURE");
+  }
+  let payload;
+  try { payload = JSON.parse(raw); } catch { return c.json({ ok: true }); }
+  const t = now();
+  const ev = parseWebhook(payload, t);
+  // Always acknowledge a signed event, stored or not, so GHL does not retry it.
+  if (!ev.locationId) return c.json({ ok: true });
+
+  if (ev.event === "install" || ev.event === "uninstall") {
+    const installed = ev.event === "install";
+    await q(
+      `INSERT INTO ghl_installs (location_id, company_id, installed_at, uninstalled_at, last_event_at, updated_at)
+       VALUES (:loc, :company, :installedAt, :uninstalledAt, :t, :t)
+       ON DUPLICATE KEY UPDATE company_id = COALESCE(VALUES(company_id), company_id),
+                               installed_at = COALESCE(VALUES(installed_at), installed_at),
+                               uninstalled_at = VALUES(uninstalled_at),
+                               last_event_at = VALUES(last_event_at), updated_at = VALUES(updated_at)`,
+      { loc: ev.locationId, company: ev.companyId, installedAt: installed ? t : null, uninstalledAt: installed ? null : t, t }
+    );
+    return c.json({ ok: true });
+  }
+
+  // Any other signed event for this location proves events are arriving.
+  await q(
+    `INSERT INTO ghl_installs (location_id, last_event_at, updated_at) VALUES (:loc, :t, :t)
+     ON DUPLICATE KEY UPDATE last_event_at = VALUES(last_event_at), updated_at = VALUES(updated_at)`,
+    { loc: ev.locationId, t }
+  );
+
+  if (ev.event === "activity") {
+    const [st] = await q("SELECT activity_monitoring FROM settings WHERE location_id = :loc", { loc: ev.locationId });
+    if (st?.activity_monitoring) {
+      // GHL retries a failed delivery up to 12 times; webhook_id makes the insert idempotent.
+      const webhookId = ev.webhookId ?? createHash("sha256").update(raw).digest("hex");
+      await q(
+        `INSERT IGNORE INTO activity_events
+           (id, location_id, user_id, occurred_at, kind, message_type, source, webhook_id, created_at)
+         VALUES (:id, :loc, :uid, :at, :kind, :messageType, :source, :webhookId, :t)`,
+        {
+          id: randomUUID(), loc: ev.locationId, uid: ev.userId, at: ev.occurredAt, kind: ev.kind,
+          messageType: ev.messageType == null ? null : String(ev.messageType).slice(0, 40),
+          source: ev.source == null ? null : String(ev.source).slice(0, 60),
+          webhookId: String(webhookId).slice(0, 100), t,
+        }
+      );
+    }
+  }
+  return c.json({ ok: true });
+});
+
 /* ---------- Static SPA (must be registered AFTER all API routes) ---------- */
 app.use("/*", serveStatic({ root: "./public" }));
 app.get("/*", serveStatic({ path: "./public/index.html" })); // SPA fallback
@@ -962,6 +1032,7 @@ app.get("/*", serveStatic({ path: "./public/index.html" })); // SPA fallback
 /* ------------------------------------------------------------------ */
 
 setInterval(() => autoCloseStale().catch((e) => console.error("[auto-close]", e)), AUTO_CLOSE_EVERY_MS);
+setInterval(() => purgeOldActivity().catch((e) => console.error("[activity-retention]", e)), AUTO_CLOSE_EVERY_MS);
 
 const port = Number(env.PORT || 3000);
 serve({ fetch: app.fetch, port }, () => console.log(`[timeclock] listening on :${port}`));

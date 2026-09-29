@@ -10,6 +10,7 @@
  */
 import CryptoJS from "crypto-js";
 import { readFileSync } from "node:fs";
+import { signTestWebhook } from "./fixtures/ghl-test-webhook-key.mjs";
 
 const BASE = process.env.BASE_URL || "http://localhost:3000";
 const SECRET = process.env.GHL_SHARED_SECRET;
@@ -105,6 +106,23 @@ async function setPolicySince(loc, ts) {
   const { skipped } = await withLocalDb((conn) =>
     conn.execute("UPDATE settings SET break_policy_since = :ts WHERE location_id = :loc", { ts, loc }));
   return !skipped;
+}
+
+/** POST a fake GHL webhook; `sign: false` sends no signature, `tamper` changes the body after signing. */
+async function ghlWebhook(payload, { sign = true, tamper = false } = {}) {
+  const raw = JSON.stringify(payload);
+  const headers = { "Content-Type": "application/json" };
+  if (sign) headers["X-GHL-Signature"] = signTestWebhook(raw);
+  const r = await fetch(`${BASE}/ghl/webhook`, { method: "POST", headers, body: tamper ? raw.replace(/}$/, ',"x":1}') : raw });
+  let body; try { body = await r.json(); } catch { body = null; }
+  return { status: r.status, body };
+}
+
+/** Run one query against the local dev DB; null when there is no local DB. */
+async function localRows(sql, params) {
+  let rows = null;
+  const { skipped } = await withLocalDb(async (conn) => { [rows] = await conn.execute(sql, params); });
+  return skipped ? null : rows;
 }
 
 console.log(`Smoke test → ${BASE} (location ${LOC})`);
@@ -713,6 +731,61 @@ check("a location that never installed reports no connection",
   awConn0.status === 200 && awConn0.body?.installed === false && awConn0.body?.has_activity_scope === false
     && awConn0.body?.last_event_at === null && awConn0.body?.events_24h === 0,
   `(${JSON.stringify(awConn0.body)})`);
+
+// Webhooks. Signed with the test key, which the local (non-production) server accepts.
+const awMsg = (extra) => ({
+  type: "OutboundMessage", locationId: AWLOC, userId: `${AWLOC}-u1`, messageType: "SMS",
+  source: "app", dateAdded: new Date().toISOString(), body: "محتوى لا يجب أن يُخزَّن", ...extra,
+});
+check("an unsigned webhook → 401",
+  (await ghlWebhook(awMsg({ webhookId: `${AWLOC}-w0` }), { sign: false })).body?.error === "WEBHOOK_BAD_SIGNATURE");
+check("a webhook whose body changed after signing → 401",
+  (await ghlWebhook(awMsg({ webhookId: `${AWLOC}-w0` }), { tamper: true })).status === 401);
+
+const awInstall = await ghlWebhook({ type: "INSTALL", locationId: AWLOC, companyId: "comp-1", webhookId: `${AWLOC}-install` });
+const awConn1 = await call(AWM, "GET", "/admin/ghl-connection");
+check("a signed install marks the location connected and records the event time",
+  awInstall.status === 200 && awConn1.body?.installed === true && typeof awConn1.body?.last_event_at === "number",
+  `(${awInstall.status} ${JSON.stringify(awConn1.body)})`);
+
+await awPolicy({ activity_monitoring: false });
+await ghlWebhook(awMsg({ webhookId: `${AWLOC}-w1` }));
+check("activity is not stored while monitoring is off",
+  (await call(AWM, "GET", "/admin/ghl-connection")).body?.events_24h === 0);
+
+await awPolicy({ activity_monitoring: true });
+const awStored = await ghlWebhook(awMsg({ webhookId: `${AWLOC}-w2` }));
+check("activity is stored once monitoring is on",
+  awStored.status === 200 && (await call(AWM, "GET", "/admin/ghl-connection")).body?.events_24h === 1);
+await ghlWebhook(awMsg({ webhookId: `${AWLOC}-w2` }));
+check("a retried webhook (same webhookId) is stored once",
+  (await call(AWM, "GET", "/admin/ghl-connection")).body?.events_24h === 1);
+
+await ghlWebhook(awMsg({ webhookId: `${AWLOC}-w3`, messageType: "CALL" }));
+const awRows = await localRows(
+  "SELECT * FROM activity_events WHERE location_id = :loc ORDER BY webhook_id",
+  { loc: AWLOC });
+if (awRows) {
+  // Ordered by webhook_id (w2 then w3); ORDER BY an ENUM would sort by declaration order.
+  check("stored activity keeps kind, type and source — and no content column exists",
+    awRows.length === 2 && awRows[0].kind === "message" && awRows[1].kind === "call"
+      && awRows[0].message_type === "SMS" && awRows[0].source === "app"
+      && awRows[0].user_id === `${AWLOC}-u1` && !("body" in awRows[0]),
+    `(${JSON.stringify(awRows)})`);
+  await localRows(
+    `INSERT INTO activity_events (id, location_id, user_id, occurred_at, kind, webhook_id, created_at)
+     VALUES (UUID(), :loc, :uid, :old, 'message', :wid, :old)`,
+    { loc: AWLOC, uid: `${AWLOC}-u1`, old: Math.floor(Date.now() / 1000) - 91 * 86400, wid: `${AWLOC}-old` });
+  await call(AWM, "GET", "/admin/ghl-connection");
+  const awOld = await localRows("SELECT COUNT(*) AS n FROM activity_events WHERE webhook_id = :wid", { wid: `${AWLOC}-old` });
+  check("activity older than 90 days is purged", Number(awOld?.[0]?.n) === 0, `(${JSON.stringify(awOld)})`);
+} else {
+  console.log("  SKIP  stored-activity and retention checks (need a local DB)");
+}
+
+await ghlWebhook({ type: "UNINSTALL", locationId: AWLOC, webhookId: `${AWLOC}-uninstall` });
+check("a signed uninstall marks the location disconnected",
+  (await call(AWM, "GET", "/admin/ghl-connection")).body?.installed === false);
 
 await cleanupLocation(AWLOC);
 
