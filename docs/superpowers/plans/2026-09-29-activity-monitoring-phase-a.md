@@ -26,7 +26,7 @@
 ## Deliberate refinements of the spec (apply the spec amendment in Task 3)
 
 1. `activity_events.user_id` is **nullable**, and rows also keep `message_type` and `source`. Phase A collects every `OutboundMessage` of a monitored location so the Innova verification can see what automated messages look like; phase B decides what counts (known employees, not automated).
-2. Install / uninstall events are recorded for **any** location whose event is correctly signed (a valid signature proves it is our own app's install), not only locations that already opened TimeClock.
+2. Install / uninstall events are recorded for **any** location whose event is correctly signed (correction after the final review: a valid signature proves the event is from GHL, not that it is for our app, because GHL signs every app's webhooks with one key; so install/uninstall must also carry our `GHL_APP_ID` when that is set), not only locations that already opened TimeClock.
 3. `GET /admin/ghl-connection` also returns `events_24h`, and runs the retention purge lazily (plus the timer).
 4. New error code `INVALID_ACTIVITY_MONITORING` (non-boolean toggle).
 

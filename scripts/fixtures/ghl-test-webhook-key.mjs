@@ -1,5 +1,5 @@
 // TEST-ONLY Ed25519 key for signing fake GHL webhooks in local tests. The server accepts
-// its public half only when NODE_ENV !== "production" (see src/ghlWebhook.js), so this
+// its public half only when NODE_ENV is "development" or "test" (see src/ghlWebhook.js), so this
 // private key grants nothing on the live site. Never use it for anything else.
 import { createPrivateKey, sign } from "node:crypto";
 

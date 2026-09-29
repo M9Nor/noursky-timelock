@@ -26,10 +26,14 @@ MySQL/MariaDB database, deployed on **Hostinger Cloud (managed Node.js)** at
 ```
 src/server.js            # entire backend API (Hono + mysql2): auth/SSO, sessions, admin, static serving
 src/tz.js                # timezone math: per-date offsets (DST-safe), local-day SQL expressions
-schema.sql               # DB schema (5 tables) — run once via phpMyAdmin import
+src/ghlWebhook.js        # GHL webhook Ed25519 signature check + payload -> metadata (never content), appId/dedupe rules
+src/ghlOAuth.js          # GHL Marketplace OAuth code exchange (timeout, unreachable vs refused)
+src/tokenCrypto.js       # AES-256-GCM encryption of stored OAuth tokens (TOKEN_ENC_KEY)
+schema.sql               # DB schema (8 tables) — run once via phpMyAdmin import
 migrations/              # numbered upgrade scripts for existing DBs (see migrations/README.md)
 scripts/smoke-test.mjs   # end-to-end backend smoke test (simulates GHL SSO)
 scripts/build-web.mjs    # postinstall/build: installs web/ dev deps + vite build → public/
+scripts/fixtures/        # test-only material for the smoke test (fake GHL webhook signing key)
 web/                     # React + Vite SPA (source of the UI)
   src/App.jsx            # auth (SSO/dev-login), 401-retry, role routing, TopBar + ToastProvider
   src/api.js             # fetch wrapper: bearer token, ApiError, api.download (authed CSV)
@@ -62,7 +66,7 @@ npm run build
 # Frontend unit tests (no DB needed — API is mocked)
 cd web && npx vitest run
 
-# Backend unit tests (timezone math; no DB needed)
+# Backend unit tests (timezone math, webhook signature/parsing, OAuth exchange, token crypto; no DB needed)
 npm run test:unit
 
 # Backend smoke test (needs a running server + DB)
@@ -74,7 +78,8 @@ BASE_URL=http://localhost:3000 GHL_SHARED_SECRET=<same-as-.env> npm run test:smo
 ## Environment variables (NAMES ONLY — never commit values; see `.env.example`)
 `NODE_ENV`, `PORT`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`,
 `GHL_SHARED_SECRET`, `SESSION_SECRET`, `ALLOWED_ORIGIN` (optional),
-`GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `TOKEN_ENC_KEY`, `GHL_REDIRECT_URI` (all optional; OAuth install callback).
+`GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `TOKEN_ENC_KEY`, `GHL_REDIRECT_URI` (all optional; OAuth install callback),
+`GHL_APP_ID` (optional but set it in production: install/uninstall webhooks from other apps are ignored).
 - `NODE_ENV=production` is **required in prod** — it disables `/auth/dev-login`.
 - On Hostinger these are set in the Node app's **Environment variables** panel, not in a file.
 
@@ -108,7 +113,11 @@ BASE_URL=http://localhost:3000 GHL_SHARED_SECRET=<same-as-.env> npm run test:smo
 - `location_id` and `user_id` always come from the verified token (`c.get("claims")`),
   never from the request body or query.
 - Every `/admin/*` route uses `authed, managerOnly`.
-- Any dev-only auth bypass must be gated by `NODE_ENV !== "production"`.
+- Any dev-only auth bypass must be gated by `NODE_ENV !== "production"`. The webhook test
+  signing key is stricter (fails closed): accepted only when `NODE_ENV` is `development` or `test`.
+- `/ghl/webhook` and `/ghl/oauth/callback` are the only unauthenticated write routes — the
+  webhook is authenticated only by GHL's signature (test key only in development/test), the
+  callback only by the code exchange.
 - **Never commit secrets, `.env` files, credentials, or Hostinger login data.**
 
 ## UI rules (for `web/`)

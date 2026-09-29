@@ -63,7 +63,8 @@ Each client Sub-Account must **reinstall once** and accept the new scope. Until 
 account works exactly as today.
 
 New Hostinger environment variables (names only; values never in the repo):
-`GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `TOKEN_ENC_KEY` (32-byte key for token encryption).
+`GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `TOKEN_ENC_KEY` (32-byte key for token encryption),
+`GHL_APP_ID` (our app's id, to ignore other apps' install/uninstall events; set in production).
 
 ## 4. Data model (migration `004`)
 
@@ -81,9 +82,9 @@ because this feature never calls the GHL API (webhooks do not need a token).
 `id`, `location_id`, `user_id` (NULL allowed), `occurred_at` (UNIX seconds, from the event payload,
 not arrival time), `kind` ENUM('message','call','comment','other'),
 `message_type` VARCHAR(40) NULL, `source` VARCHAR(60) NULL,
-`webhook_id` (UNIQUE — GHL retries up to 12 times), `created_at`.
+`webhook_id` (UNIQUE dedupe key — GHL retries up to 12 times; holds `m:<messageId>` when the payload has a message id, else the `webhookId`, else a hash of the raw body), `created_at`.
 Index `(location_id, user_id, occurred_at)` and `(occurred_at)` for retention.
-**Retention: rows older than 90 days are deleted daily.**
+**Retention: rows older than 90 days are deleted every 15 minutes (timer) and lazily on `GET /admin/ghl-connection`.**
 
 **`activity_alerts`** — alerts and their review trail. Kept forever.
 `id`, `location_id`, `user_id`, `session_id` (NULL for not-clocked-in),
@@ -118,18 +119,26 @@ NULL means "not monitored during this session" and is shown as "—", never as z
 ## 5. Server behaviour
 
 ### 5.1 `POST /ghl/webhook`
-1. Read the raw body; verify `X-GHL-Signature` (Ed25519, GHL public key). Invalid →
-   `401`, nothing stored. (The legacy `X-WH-Signature` RSA header is deprecated by GHL
+1. Read the raw body (max 256 KB, else `413 PAYLOAD_TOO_LARGE`); verify `X-GHL-Signature`
+   (Ed25519, GHL public key). Invalid → `401`, nothing stored (one content-free warning line
+   per minute at most is logged). **A valid signature proves the event came from GHL, not that
+   it is meant for our app:** GHL signs every Marketplace app's webhooks with the same key, so
+   another app installed on the same location could have its signed events reach us. (The legacy `X-WH-Signature` RSA header is deprecated by GHL
    on 2026-09-01 and is not supported.)
-2. Install / uninstall events → upsert `ghl_installs`.
+2. Install / uninstall events → upsert `ghl_installs`, but only when the payload's `appId`
+   equals our `GHL_APP_ID`; another app's (or a missing) `appId` is acknowledged with `200`
+   and writes nothing. With `GHL_APP_ID` unset the check is off — set it in production.
 3. `OutboundMessage` for a location with `activity_monitoring = 1` → `INSERT IGNORE`
    (metadata only, `user_id` may be NULL). Phase B decides which rows count (known
-   employees, not automated).
-4. Always update `ghl_installs.last_event_at` for a known location.
+   employees, not automated). The same message redelivered through another app carries a new
+   `webhookId`, so the dedupe key is `m:<messageId>` when present, else `webhookId`, else the
+   SHA-256 of the raw body.
+4. For any other signed event with a `locationId`, upsert the `ghl_installs` row and update
+   its `last_event_at` (a row is created if the location was not known yet).
 5. Respond `200` quickly for any valid, signed event (including ignored ones), so GHL
    does not retry.
 
-Unsigned requests never write anything; correctly signed install/uninstall events are recorded for any location.
+Unsigned requests never write anything. Correctly signed install/uninstall events are recorded for any location, provided they carry our `appId` (when `GHL_APP_ID` is set): the signature proves the event is from GHL, not that it is for our app.
 
 ### 5.2 `GET /ghl/oauth/callback?code=`
 Exchange the code at `https://services.leadconnectorhq.com/oauth/token`
@@ -178,7 +187,7 @@ consecutive points {start, events…, end}, **with break time (employee and fixe
 removed from each gap**.
 
 ### 5.7 Retention
-Daily: `DELETE FROM activity_events WHERE occurred_at < now − 90 days` (also run lazily on `GET /admin/ghl-connection`).
+Every 15 minutes (timer) and lazily: `DELETE FROM activity_events WHERE occurred_at < now − 90 days` (the lazy run is on `GET /admin/ghl-connection`).
 
 ## 6. Interface
 
@@ -203,17 +212,20 @@ Daily: `DELETE FROM activity_events WHERE occurred_at < now − 90 days` (also r
 
 ## 7. Errors (new codes, documented in PROJECT.md §8)
 
-`WEBHOOK_BAD_SIGNATURE` (401), `ALERT_NOT_FOUND` (404), `ALERT_NOT_ENDABLE` (409),
+`WEBHOOK_BAD_SIGNATURE` (401), `PAYLOAD_TOO_LARGE` (413, webhook body over 256 KB), `ALERT_NOT_FOUND` (404), `ALERT_NOT_ENDABLE` (409),
 `NOTE_TOO_LONG` reused for employee notes over 300, `INVALID_IDLE_MINUTES` (400),
 `INVALID_ACTIVITY_MONITORING` (400),
-`OAUTH_EXCHANGE_FAILED` (shown as a page, not JSON).
+`OAUTH_EXCHANGE_FAILED` (GHL refused the code, 502) and `OAUTH_UNREACHABLE` (GHL not reached
+within 10 s, 504) — both shown as pages, not JSON.
 
 ## 8. Testing
 
 - Unit: gap computation with breaks and `activity_monitoring_since`; session summary;
   Ed25519 verification; token encryption round-trip.
 - Smoke (local): fake webhooks signed with a **test key pair**. The test public key is
-  accepted **only when `NODE_ENV !== "production"`** (same rule as dev-login). Checks: bad
+  accepted **only when `NODE_ENV` is `development` or `test`** (fails closed, stricter than
+  dev-login). Against production the smoke test records one "refused" check and skips the
+  test-signed checks. Checks: bad
   signature rejected; duplicate `webhook_id` stored once; activity recorded only for
   monitored locations and known employees; idle alert raised (backdated sessions);
   no idle during a break; late event resolves; not-clocked-in alert and auto-resolve on
