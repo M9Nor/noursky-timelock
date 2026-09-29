@@ -144,7 +144,14 @@ async function getSettings(loc) {
   const rows = await q("SELECT * FROM settings WHERE location_id = :loc", { loc });
   const st = rows[0];
   // TINYINT(1) arrives as 0/1; the API speaks booleans.
-  return st ? { ...st, breaks_enabled: Boolean(st.breaks_enabled), break_paid: Boolean(st.break_paid) } : null;
+  return st
+    ? {
+      ...st,
+      breaks_enabled: Boolean(st.breaks_enabled),
+      break_paid: Boolean(st.break_paid),
+      activity_monitoring: Boolean(st.activity_monitoring),
+    }
+    : null;
 }
 
 const NOTE_POLICIES = ["off", "optional", "required"];
@@ -850,6 +857,28 @@ app.get("/admin/settings", authed, managerOnly, async (c) => {
   return c.json(await getSettings(c.get("claims").loc));
 });
 
+// The read scope our Marketplace app requests for activity (spec §3).
+const ACTIVITY_SCOPE = "conversations/message.readonly";
+
+app.get("/admin/ghl-connection", authed, managerOnly, async (c) => {
+  const { loc } = c.get("claims");
+  const [row] = await q(
+    "SELECT scopes, installed_at, uninstalled_at, last_event_at FROM ghl_installs WHERE location_id = :loc",
+    { loc }
+  );
+  const [cnt] = await q(
+    "SELECT COUNT(*) AS n FROM activity_events WHERE location_id = :loc AND occurred_at >= :since",
+    { loc, since: now() - 86400 }
+  );
+  const scopes = String(row?.scopes ?? "").split(/[\s,]+/).filter(Boolean);
+  return c.json({
+    installed: Boolean(row?.installed_at && !row?.uninstalled_at),
+    has_activity_scope: scopes.includes(ACTIVITY_SCOPE),
+    last_event_at: row?.last_event_at == null ? null : Number(row.last_event_at),
+    events_24h: Number(cnt.n),
+  });
+});
+
 app.put("/admin/settings", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
   // Windows that already began under the CURRENT policy are recorded before it changes;
@@ -885,6 +914,16 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   if (typeof breakPaid !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
   const notePolicy = b.note_on_stop === undefined ? "off" : b.note_on_stop;
   if (!NOTE_POLICIES.includes(notePolicy)) throw new HttpError(400, "INVALID_NOTE_POLICY");
+  if (b.activity_monitoring !== undefined && typeof b.activity_monitoring !== "boolean") {
+    throw new HttpError(400, "INVALID_ACTIVITY_MONITORING");
+  }
+  const monitoring = b.activity_monitoring === true;
+  // Same empty-field rule as the grace: "" / null / absent mean the 30-minute default.
+  const rawIdle = b.idle_minutes;
+  const idleMinutes = rawIdle === undefined || rawIdle === null || rawIdle === "" ? 30 : Number(rawIdle);
+  if (!Number.isInteger(idleMinutes) || idleMinutes < 10 || idleMinutes > 240) {
+    throw new HttpError(400, "INVALID_IDLE_MINUTES");
+  }
 
   // break_policy_since moves to now only when the break policy itself changes. It is
   // assigned FIRST so it compares against the stored values: MySQL evaluates single-table
@@ -894,10 +933,13 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
     `UPDATE settings SET break_policy_since = IF(break_mode <=> :breakMode AND break_start <=> :breakStart
                                                   AND break_end <=> :breakEnd AND break_paid <=> :breakPaid,
                                                   break_policy_since, :t),
+                         activity_monitoring_since = IF(activity_monitoring = 0 AND :monitoring = 1,
+                                                        :t, activity_monitoring_since),
                          timezone = :tz, daily_target_hours = :target, work_start = :ws,
                          late_grace_minutes = :grace, max_session_hours = :max,
                          breaks_enabled = :breaksEnabled, break_mode = :breakMode,
                          break_start = :breakStart, break_end = :breakEnd, break_paid = :breakPaid,
+                         activity_monitoring = :monitoring, idle_minutes = :idleMinutes,
                          note_on_stop = :notePolicy, updated_at = :t
       WHERE location_id = :loc`,
     {
@@ -905,6 +947,7 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
       // Kept in sync so code that still reads breaks_enabled behaves the same.
       breaksEnabled: breakMode === "flexible" ? 1 : 0, breakMode, breakStart, breakEnd,
       breakPaid: breakPaid ? 1 : 0, notePolicy, t: now(), loc,
+      monitoring: monitoring ? 1 : 0, idleMinutes,
     }
   );
   return c.json(await getSettings(loc));

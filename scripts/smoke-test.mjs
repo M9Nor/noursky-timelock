@@ -90,7 +90,7 @@ async function withLocalDb(fn) {
 /** Best-effort removal of one fixture location's rows, so test data does not accumulate. */
 async function cleanupLocation(loc) {
   const { skipped } = await withLocalDb(async (conn) => {
-    for (const table of ["breaks", "edits_log", "sessions", "employees", "settings"]) {
+    for (const table of ["activity_events", "activity_alerts", "ghl_installs", "breaks", "edits_log", "sessions", "employees", "settings"]) {
       await conn.execute(`DELETE FROM ${table} WHERE location_id = :loc`, { loc });
     }
   });
@@ -663,6 +663,39 @@ if (tdAfter > 0) {
   console.log("  SKIP  across-midnight today check (less than a minute past local midnight)");
 }
 await cleanupLocation(TDLOC);
+
+// --- Activity monitoring (phase A): settings, connection status, webhooks, OAuth. ---
+const AWLOC = `${LOC}-aw`;
+const awMgr = await sso({ userId: `${AWLOC}-m1`, role: "admin", type: "account", activeLocation: AWLOC, userName: "مدير النشاط", email: "awm@x.com" });
+const awEmp = await sso({ userId: `${AWLOC}-u1`, role: "user", type: "account", activeLocation: AWLOC, userName: "موظف النشاط", email: "awe@x.com" });
+const AWM = awMgr.body?.token, AWE = awEmp.body?.token;
+const awBase = { timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: null, late_grace_minutes: 15, note_on_stop: "off", break_mode: "off" };
+const awPolicy = (extra) => call(AWM, "PUT", "/admin/settings", { ...awBase, ...extra });
+
+const awDefaults = await call(AWM, "GET", "/admin/settings");
+check("activity monitoring is off by default with a 30-minute idle threshold",
+  awDefaults.body?.activity_monitoring === false && awDefaults.body?.idle_minutes === 30 && awDefaults.body?.activity_monitoring_since === null,
+  `(${JSON.stringify({ m: awDefaults.body?.activity_monitoring, i: awDefaults.body?.idle_minutes, s: awDefaults.body?.activity_monitoring_since })})`);
+const awOnAt = Math.floor(Date.now() / 1000);
+const awOn = await awPolicy({ activity_monitoring: true, idle_minutes: 45 });
+check("switching monitoring on saves the threshold and stamps when it started",
+  awOn.status === 200 && awOn.body?.activity_monitoring === true && awOn.body?.idle_minutes === 45
+    && Math.abs(Number(awOn.body?.activity_monitoring_since) - awOnAt) <= 5,
+  `(${JSON.stringify({ m: awOn.body?.activity_monitoring, i: awOn.body?.idle_minutes, s: awOn.body?.activity_monitoring_since })})`);
+const awAgain = await awPolicy({ activity_monitoring: true, idle_minutes: 30 });
+check("saving again while monitoring stays on keeps the original start",
+  awAgain.body?.activity_monitoring_since === awOn.body?.activity_monitoring_since);
+check("idle threshold outside 10–240 → 400",
+  (await awPolicy({ activity_monitoring: true, idle_minutes: 5 })).body?.error === "INVALID_IDLE_MINUTES");
+check("non-boolean monitoring toggle → 400",
+  (await awPolicy({ activity_monitoring: "yes" })).body?.error === "INVALID_ACTIVITY_MONITORING");
+const awConn0 = await call(AWM, "GET", "/admin/ghl-connection");
+check("a location that never installed reports no connection",
+  awConn0.status === 200 && awConn0.body?.installed === false && awConn0.body?.has_activity_scope === false
+    && awConn0.body?.last_event_at === null && awConn0.body?.events_24h === 0,
+  `(${JSON.stringify(awConn0.body)})`);
+
+await cleanupLocation(AWLOC);
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
 

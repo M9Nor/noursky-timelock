@@ -191,6 +191,9 @@ role === "admin"  أو  type === "agency"   →  manager
 | `break_end` | CHAR(5) NULL | `NULL` | نهاية النافذة الثابتة، `HH:MM` بتوقيت الحساب — إلزامية مع `fixed` |
 | `break_paid` | TINYINT(1) | 0 | إذا 1، الاستراحة الثابتة ما بتنخصم من وقت العمل |
 | `break_policy_since` | BIGINT NULL | `NULL` | UNIX seconds لآخر مرة تغيّرت فيها سياسة الاستراحة (`break_mode` أو `break_start` أو `break_end` أو `break_paid`) — `PUT /admin/settings` بيحطها `now` بس لما وحدة من هدول تتغير، وإلا بتضل متل ما هي. أي نافذة ثابتة بلّشت **قبلها** ما بتنسجل أبداً (السياسة بتسري من لحظة الحفظ، مش على نوافذ سابقة). `NULL` = بدون قيد (حسابات ما غيّرت السياسة من بعد migration 003) |
+| `activity_monitoring` | TINYINT(1) | 0 | مراقبة النشاط من GHL، مطفاية افتراضياً |
+| `idle_minutes` | INT | 30 | حد الخمول بالدقائق (10–240)، بيستخدمه الكشف بالمرحلة ب |
+| `activity_monitoring_since` | BIGINT NULL | `NULL` | UNIX seconds لوقت آخر تفعيل للمراقبة؛ الخمول ما بينحسب من قبله. `PUT /admin/settings` بيحطها `now` لما المراقبة تنتقل من مطفاية لمفعّلة |
 | `note_on_stop` | ENUM(`off`,`optional`,`required`) | `off` | سياسة الملاحظة عند إنهاء الدوام |
 | `max_session_hours` | DECIMAL(4,2) | 12 | حد الإغلاق التلقائي |
 | `updated_at` | BIGINT | | |
@@ -213,6 +216,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | `duration_sec` | بيتحسب عند الإغلاق. هاي المدة الكاملة (wall-clock)، **مش** وقت العمل — وقت العمل = `duration_sec − break_sec` وبيتحسب وقت القراءة، مش مخزّن (شوف تحت) |
 | `closed_by` | `user` / `auto` / `admin` |
 | `note` | VARCHAR(500) NULL — ملاحظة الموظف عند الإنهاء، بس إذا سياسة `note_on_stop` مش `off` (شوف تحت) |
+| `activity_count`, `last_activity_at`, `longest_idle_sec` | ملخص النشاط للجلسة (INT / BIGINT / INT، كلها NULL). `NULL` = ما كانت في مراقبة |
 | `open_flag` | **Generated column:** `1` إذا مفتوحة، `NULL` إذا مسكّرة |
 
 **الحماية من الجلسات المكررة:** `UNIQUE (user_id, location_id, open_flag)`. لأن الـ UNIQUE بيسمح بعدد لا نهائي من `NULL`، النتيجة إنه مسموح جلسة مفتوحة وحدة بس لكل موظف. هاد بيحمي من الضغط مرتين أو فتح tab تاني على مستوى الداتابيز نفسها. (MySQL ما بيدعم partial index، لهيك استخدمنا هالحل.)
@@ -238,6 +242,12 @@ role === "admin"  أو  type === "agency"   →  manager
 **استراحة مفتوحة على جلسة مسكّرة:** لو جلسة سكّرت (إغلاق تلقائي `autoCloseStale`، أو تعديل مدير غيّر `ended_at`) وفيها استراحة لسا مفتوحة، `autoCloseStale` بتسكّر تلقائياً أي استراحة زي هيك على لحظة إغلاق جلستها — فما بضل في استراحة معلّقة أبداً.
 
 **تعطيل الاستراحات:** زر الاستراحة بيشتغل بس لما `break_mode = 'flexible'` (`breaks_enabled` صار مجرد نسخة متزامنة للتوافق). لو المدير غيّر `break_mode` لـ `off` أو `fixed`، الموظف ما بيقدر يبلّش استراحة جديدة، **بس دائماً بيقدر ينهي استراحة شغالة عندو** — حتى ما يعلق فيها للأبد إذا المدير عطّلها وهو فيها.
+
+### جداول ربط GHL ومراقبة النشاط (migration 004)
+
+- `ghl_installs` — صف لكل Sub-Account: حالة تثبيت التطبيق (`installed_at` / `uninstalled_at`)، الـ tokens مشفّرة (`access_token_enc`, `refresh_token_enc`)، `scopes`، و`last_event_at` (آخر webhook وصل).
+- `activity_events` — بيانات وصفية بس (النوع، المصدر، الوقت، `webhook_id` فريد لمنع التكرار)، **ولا محتوى** رسالة أو مكالمة. بتنحذف بعد 90 يوم.
+- `activity_alerts` — تنبيهات الخمول و"شغّال بدون تسجيل دخول" (للمرحلة ب). الفريدة `(session_id, idle_open_flag)` و`(location_id, user_id, nci_open_flag)` بتمنع تنبيه مفتوح مكرر؛ الأعمدة `*_open_flag` أرقام generated (مش نصوص) لأن MariaDB 11 بيرفض IF() نصّي بعمود STORED.
 
 ### `edits_log`
 
@@ -279,7 +289,8 @@ role === "admin"  أو  type === "agency"   →  manager
 | PATCH | `/admin/sessions/:id` | Body: `{ started_at, ended_at, reason }` — السبب إجباري |
 | GET | `/admin/export.csv?from=&to=` | CSV مع BOM: Employee, Email, Start, End, Hours (بدون الاستراحات، وما بتنزل تحت 0), Break (min), Closed by, Note. الأوقات بالـ timezone تبع الحساب، وأي خلية بتبدأ بـ = + - @ بتنسبق بـ ' لحتى ما تشتغل كمعادلة |
 | GET | `/admin/settings` | الإعدادات الحالية |
-| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص = القيمة الافتراضية. قبل الحفظ بيسجّل النوافذ الثابتة اللي بلّشت تحت السياسة الحالية، وإذا تغيّر `break_mode`/`break_start`/`break_end`/`break_paid` بيصير `break_policy_since = now` |
+| GET | `/admin/ghl-connection` | حالة الربط مع GHL لهالحساب: `{ installed, has_activity_scope, last_event_at, events_24h }` |
+| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid, activity_monitoring (boolean), idle_minutes (10–240، افتراضي 30) }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص = القيمة الافتراضية. قبل الحفظ بيسجّل النوافذ الثابتة اللي بلّشت تحت السياسة الحالية، وإذا تغيّر `break_mode`/`break_start`/`break_end`/`break_paid` بيصير `break_policy_since = now`. وتفعيل المراقبة بيسجّل `activity_monitoring_since = now` |
 
 ### رموز الأخطاء
 
@@ -310,6 +321,8 @@ role === "admin"  أو  type === "agency"   →  manager
 | `NO_OPEN_BREAK` | 409 | | لا توجد استراحة مفتوحة |
 | `NOTE_REQUIRED` | 400 | المدير خلّى الملاحظة إلزامية | اكتب ملاحظة قبل إنهاء الدوام |
 | `NOTE_TOO_LONG` | 400 | أكتر من 500 حرف | الملاحظة طويلة جداً |
+| `INVALID_IDLE_MINUTES` | 400 | حد الخمول مش رقم صحيح بين 10 و240 | حد الخمول لازم يكون بين 10 و240 دقيقة |
+| `INVALID_ACTIVITY_MONITORING` | 400 | `activity_monitoring` مش boolean | إعداد مراقبة النشاط غير صحيح |
 | `INTERNAL_ERROR` | 500 | | حدث خطأ، حاول مرة أخرى |
 
 ---
