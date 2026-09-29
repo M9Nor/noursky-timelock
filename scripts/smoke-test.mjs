@@ -791,6 +791,13 @@ const awBig = await ghlWebhook({ type: "OutboundMessage", locationId: AWLOC, pad
 check("a webhook over 256 KB → 413 PAYLOAD_TOO_LARGE",
   awBig.status === 413 && awBig.body?.error === "PAYLOAD_TOO_LARGE", `(${awBig.status} ${JSON.stringify(awBig.body)})`);
 
+// OAuth callback. The local .env has no GHL_CLIENT_ID, so a code cannot be exchanged here.
+const awNoCode = await fetch(`${BASE}/ghl/oauth/callback`);
+check("the OAuth callback without a code shows an error page",
+  awNoCode.status === 400 && (await awNoCode.text()).includes("أعد تثبيت التطبيق"));
+const awNotConfigured = await fetch(`${BASE}/ghl/oauth/callback?code=test-code`);
+check("the OAuth callback explains when the server is not configured",
+  awNotConfigured.status === 503 && (await awNotConfigured.text()).includes("غير مُعدّ"));
 await cleanupLocation(AWLOC);
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);

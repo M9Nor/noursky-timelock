@@ -12,6 +12,8 @@ import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID }
 import { localZone, localDate, wallToUtc, fixedWindows, localDayBounds } from "./tz.js";
 import { bodyLimit } from "hono/body-limit";
 import { verifyGhlSignature, parseWebhook } from "./ghlWebhook.js";
+import { exchangeCode } from "./ghlOAuth.js";
+import { encryptToken } from "./tokenCrypto.js";
 
 /* ------------------------------------------------------------------ */
 /* Config                                                              */
@@ -1043,6 +1045,54 @@ app.post("/ghl/webhook", webhookBodyLimit, async (c) => {
     }
   }
   return c.json({ ok: true });
+});
+
+const DEFAULT_REDIRECT_URI = "https://timeclock.noursky.com/ghl/oauth/callback";
+
+// A tiny self-contained Arabic page; the texts are fixed strings, never request data.
+function installPage(title, message) {
+  return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+<style>body{font-family:system-ui,Tahoma,sans-serif;background:#F7F6FB;color:#1D1B2E;display:grid;place-items:center;min-height:100vh;margin:0;padding:16px}
+main{max-width:460px;background:#fff;border:1px solid #E3E0F0;border-radius:14px;padding:28px}h1{color:#6C5CE7;font-size:20px;margin:0 0 10px}p{margin:0;line-height:1.8}</style>
+</head><body><main><h1>${title}</h1><p>${message}</p></main></body></html>`;
+}
+
+app.get("/ghl/oauth/callback", async (c) => {
+  const code = c.req.query("code");
+  if (!code) {
+    return c.html(installPage("تعذّر التثبيت", "الرابط ناقص. أعد تثبيت التطبيق من الـ Marketplace."), 400);
+  }
+  if (!env.GHL_CLIENT_ID || !env.GHL_CLIENT_SECRET || !env.TOKEN_ENC_KEY) {
+    return c.html(installPage("تعذّر التثبيت", "الربط مع GHL غير مُعدّ على السيرفر بعد. تواصل مع NourSky."), 503);
+  }
+  let tok;
+  try {
+    tok = await exchangeCode({
+      code, clientId: env.GHL_CLIENT_ID, clientSecret: env.GHL_CLIENT_SECRET,
+      redirectUri: env.GHL_REDIRECT_URI || DEFAULT_REDIRECT_URI,
+    });
+  } catch (e) {
+    console.error("[oauth]", e.message, e.status ?? "");
+    return c.html(installPage("تعذّر التثبيت", "GHL رفض طلب الربط. أعد تثبيت التطبيق من الـ Marketplace."), 502);
+  }
+  const t = now();
+  await q(
+    `INSERT INTO ghl_installs (location_id, company_id, access_token_enc, refresh_token_enc, token_expires_at,
+                               scopes, installed_at, uninstalled_at, updated_at)
+     VALUES (:loc, :company, :access, :refresh, :expiresAt, :scopes, :t, NULL, :t)
+     ON DUPLICATE KEY UPDATE company_id = VALUES(company_id), access_token_enc = VALUES(access_token_enc),
+                             refresh_token_enc = VALUES(refresh_token_enc), token_expires_at = VALUES(token_expires_at),
+                             scopes = VALUES(scopes), installed_at = VALUES(installed_at),
+                             uninstalled_at = NULL, updated_at = VALUES(updated_at)`,
+    {
+      loc: tok.locationId, company: tok.companyId,
+      access: encryptToken(tok.accessToken, env.TOKEN_ENC_KEY),
+      refresh: tok.refreshToken ? encryptToken(tok.refreshToken, env.TOKEN_ENC_KEY) : null,
+      expiresAt: t + tok.expiresIn, scopes: String(tok.scopes).slice(0, 1000), t,
+    }
+  );
+  return c.html(installPage("تم الربط", "تم ربط TimeClock بحسابك. بتقدر تسكّر هالصفحة وترجع لـ GHL."));
 });
 
 /* ---------- Static SPA (must be registered AFTER all API routes) ---------- */

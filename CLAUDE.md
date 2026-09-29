@@ -73,7 +73,8 @@ BASE_URL=http://localhost:3000 GHL_SHARED_SECRET=<same-as-.env> npm run test:smo
 
 ## Environment variables (NAMES ONLY — never commit values; see `.env.example`)
 `NODE_ENV`, `PORT`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`,
-`GHL_SHARED_SECRET`, `SESSION_SECRET`, `ALLOWED_ORIGIN` (optional).
+`GHL_SHARED_SECRET`, `SESSION_SECRET`, `ALLOWED_ORIGIN` (optional),
+`GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `TOKEN_ENC_KEY`, `GHL_REDIRECT_URI` (all optional; OAuth install callback).
 - `NODE_ENV=production` is **required in prod** — it disables `/auth/dev-login`.
 - On Hostinger these are set in the Node app's **Environment variables** panel, not in a file.
 

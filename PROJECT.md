@@ -297,6 +297,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | Method | Path | الوصف |
 |---|---|---|
 | POST | `/ghl/webhook` | أحداث GHL. التحقق **بس** بالتوقيع `X-GHL-Signature` (Ed25519، المفتاح العام تبع GHL). توقيع غلط → `401 WEBHOOK_BAD_SIGNATURE`. أي حدث موقّع صح بيرجع `200` (انخزّن أو انتجاهل) لحتى GHL ما يعيد الإرسال. `INSTALL`/`UNINSTALL` بيحدّثوا `ghl_installs`؛ `OutboundMessage` بينخزّن كـ `activity_events` (بيانات وصفية بس) إذا `activity_monitoring = 1`، ومرة وحدة لكل `webhookId`. أكبر من 256KB → `413 PAYLOAD_TOO_LARGE` |
+| GET | `/ghl/oauth/callback?code=` | رابط الرجوع بعد تثبيت التطبيق. بيبدّل الكود بتوكن من `services.leadconnectorhq.com/oauth/token` وبيخزّنه **مشفّر** (AES-256-GCM بـ `TOKEN_ENC_KEY`) بـ `ghl_installs`. بيرجّع صفحة عربية: `200` نجاح، `400` بدون كود، `503` السيرفر مش مُعدّ، `502` GHL رفض الكود |
 
 ### رموز الأخطاء
 
@@ -483,6 +484,7 @@ BASE_URL=http://localhost:3000 GHL_SHARED_SECRET=<نفس القيمة بالـ .
 5. اربط الدومين (مثلاً `timeclock.noursky.com`) وتأكد من الـ SSL.
 6. افتح `/health` → لازم يرجع `{ "ok": true }`.
 7. شغّل الـ smoke test على السيرفر الحقيقي: `BASE_URL=https://timeclock.noursky.com GHL_SHARED_SECRET=... npm run test:smoke`. بيستخدم location_id عشوائي فما بيلمس بيانات عملاء.
+8. متغيرات اختيارية لربط الـ OAuth ومراقبة النشاط (بدونها بيرجع `/ghl/oauth/callback` بـ `503`): `GHL_CLIENT_ID` و `GHL_CLIENT_SECRET` (من إعدادات التطبيق بالـ Marketplace)، `TOKEN_ENC_KEY` (64 حرف hex عشوائي، مثلاً `openssl rand -hex 32`)، و `GHL_REDIRECT_URI` (اختياري، الافتراضي `https://timeclock.noursky.com/ghl/oauth/callback`).
 
 ---
 
