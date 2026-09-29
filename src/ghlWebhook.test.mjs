@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { verifyGhlSignature, parseWebhook } from "./ghlWebhook.js";
+import { verifyGhlSignature, parseWebhook, testKeyAllowed, isForOurApp, activityDedupeKey } from "./ghlWebhook.js";
 import { signTestWebhook } from "../scripts/fixtures/ghl-test-webhook-key.mjs";
 
 const body = JSON.stringify({ type: "OutboundMessage", locationId: "loc1", webhookId: "w1" });
@@ -31,10 +31,10 @@ test("GHL's real key rejects a signature it did not make", () => {
 test("an outbound message becomes activity with its own timestamp", () => {
   const ev = parseWebhook({
     type: "OutboundMessage", locationId: "loc1", webhookId: "w1", userId: "u1",
-    messageType: "SMS", source: "app", dateAdded: "2026-09-29T08:15:30.000Z", body: "hello",
+    messageType: "SMS", source: "app", dateAdded: "2026-09-29T08:15:30.000Z", body: "hello", messageId: "m1",
   }, 999);
   assert.deepEqual(ev, {
-    event: "activity", locationId: "loc1", webhookId: "w1", userId: "u1",
+    event: "activity", locationId: "loc1", webhookId: "w1", messageId: "m1", userId: "u1",
     kind: "message", messageType: "SMS", source: "app", occurredAt: Date.UTC(2026, 8, 29, 8, 15, 30) / 1000,
   });
   assert.equal("body" in ev, false, "message content must never be carried forward");
@@ -51,15 +51,51 @@ test("a missing or bad date falls back to the arrival time; a missing user stays
   assert.equal(ev.occurredAt, 1234);
   assert.equal(ev.userId, null);
   assert.equal(ev.webhookId, null);
+  assert.equal(ev.messageId, null);
 });
 
 test("install and uninstall events are recognised", () => {
   assert.deepEqual(parseWebhook({ type: "INSTALL", locationId: "loc1", companyId: "c1", webhookId: "w9" }, 1),
-    { event: "install", locationId: "loc1", companyId: "c1", webhookId: "w9" });
+    { event: "install", locationId: "loc1", companyId: "c1", webhookId: "w9", appId: null });
+  assert.equal(parseWebhook({ type: "INSTALL", locationId: "loc1", appId: "app1" }, 1).appId, "app1");
+  assert.equal(parseWebhook({ type: "UNINSTALL", locationId: "loc1", appId: "app1" }, 1).appId, "app1");
   assert.equal(parseWebhook({ type: "UNINSTALL", locationId: "loc1" }, 1).event, "uninstall");
 });
 
 test("any other event type is ignored", () => {
   assert.deepEqual(parseWebhook({ type: "ContactCreate", locationId: "loc1", webhookId: "w2" }, 1),
     { event: "ignored", locationId: "loc1", webhookId: "w2" });
+});
+
+test("the test key is accepted only for an explicit development or test NODE_ENV", () => {
+  assert.equal(testKeyAllowed("development"), true);
+  assert.equal(testKeyAllowed("test"), true);
+  assert.equal(testKeyAllowed("production"), false);
+  assert.equal(testKeyAllowed(undefined), false);
+  assert.equal(testKeyAllowed(""), false);
+  assert.equal(testKeyAllowed("staging"), false);
+});
+
+test("with GHL_APP_ID set, an install/uninstall for another app (or with no appId) is not ours", () => {
+  const mine = parseWebhook({ type: "INSTALL", locationId: "loc1", appId: "app1" }, 1);
+  const foreign = parseWebhook({ type: "UNINSTALL", locationId: "loc1", appId: "other" }, 1);
+  const missing = parseWebhook({ type: "INSTALL", locationId: "loc1" }, 1);
+  assert.equal(isForOurApp(mine, "app1"), true);
+  assert.equal(isForOurApp(foreign, "app1"), false);
+  assert.equal(isForOurApp(missing, "app1"), false);
+});
+
+test("with GHL_APP_ID unset the app check is off", () => {
+  assert.equal(isForOurApp(parseWebhook({ type: "INSTALL", locationId: "loc1", appId: "other" }, 1), undefined), true);
+  assert.equal(isForOurApp(parseWebhook({ type: "INSTALL", locationId: "loc1" }, 1), ""), true);
+});
+
+test("the activity dedupe key prefers the message id, then the webhook id, then a hash of the body", () => {
+  assert.equal(activityDedupeKey({ messageId: "m1", webhookId: "w1" }, "raw"), "m:m1");
+  assert.equal(activityDedupeKey({ messageId: null, webhookId: "w1" }, "raw"), "w1");
+  const h = activityDedupeKey({ messageId: null, webhookId: null }, "raw");
+  assert.match(h, /^[0-9a-f]{64}$/);
+  assert.equal(h, activityDedupeKey({}, "raw"));
+  assert.notEqual(h, activityDedupeKey({}, "other"));
+  assert.equal(activityDedupeKey({ messageId: "x".repeat(300) }, "raw").length, 100);
 });

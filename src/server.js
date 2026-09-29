@@ -11,7 +11,7 @@ import mysql from "mysql2/promise";
 import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { localZone, localDate, wallToUtc, fixedWindows, localDayBounds } from "./tz.js";
 import { bodyLimit } from "hono/body-limit";
-import { verifyGhlSignature, parseWebhook } from "./ghlWebhook.js";
+import { verifyGhlSignature, parseWebhook, testKeyAllowed, isForOurApp, activityDedupeKey } from "./ghlWebhook.js";
 import { exchangeCode } from "./ghlOAuth.js";
 import { encryptToken } from "./tokenCrypto.js";
 
@@ -990,12 +990,21 @@ const webhookBodyLimit = bodyLimit({
   },
 });
 
+// One log line per minute at most, so a flood of bad signatures cannot flood the log.
+let lastBadSignatureLogAt = 0;
+
 app.post("/ghl/webhook", webhookBodyLimit, async (c) => {
   const raw = await c.req.text();
-  // The signature is the only authentication this route has. The test key is honoured
-  // only outside production, like dev-login.
-  const allowTestKey = env.NODE_ENV !== "production";
-  if (!verifyGhlSignature(raw, c.req.header("x-ghl-signature"), { allowTestKey })) {
+  // The signature is the only authentication this route has. The test key is honoured only
+  // when NODE_ENV is explicitly "development" or "test" (fails closed otherwise).
+  const allowTestKey = testKeyAllowed(env.NODE_ENV);
+  const signature = c.req.header("x-ghl-signature");
+  if (!verifyGhlSignature(raw, signature, { allowTestKey })) {
+    const nowMs = Date.now();
+    if (nowMs - lastBadSignatureLogAt >= 60_000) {
+      lastBadSignatureLogAt = nowMs;
+      console.warn("[webhook] bad signature", { bytes: Buffer.byteLength(raw, "utf8"), hasHeader: Boolean(signature) });
+    }
     throw new HttpError(401, "WEBHOOK_BAD_SIGNATURE");
   }
   let payload;
@@ -1006,6 +1015,8 @@ app.post("/ghl/webhook", webhookBodyLimit, async (c) => {
   if (!ev.locationId) return c.json({ ok: true });
 
   if (ev.event === "install" || ev.event === "uninstall") {
+    // GHL signs all apps' events with one key: ignore (but acknowledge) another app's.
+    if (!isForOurApp(ev, env.GHL_APP_ID)) return c.json({ ok: true });
     const installed = ev.event === "install";
     await q(
       `INSERT INTO ghl_installs (location_id, company_id, installed_at, uninstalled_at, last_event_at, updated_at)
@@ -1029,8 +1040,9 @@ app.post("/ghl/webhook", webhookBodyLimit, async (c) => {
   if (ev.event === "activity") {
     const [st] = await q("SELECT activity_monitoring FROM settings WHERE location_id = :loc", { loc: ev.locationId });
     if (st?.activity_monitoring) {
-      // GHL retries a failed delivery up to 12 times; webhook_id makes the insert idempotent.
-      const webhookId = ev.webhookId ?? createHash("sha256").update(raw).digest("hex");
+      // GHL retries a failed delivery up to 12 times, and the same message can arrive again
+      // through another app with a new webhookId: the key prefers the message id.
+      const webhookId = activityDedupeKey(ev, raw);
       await q(
         `INSERT IGNORE INTO activity_events
            (id, location_id, user_id, occurred_at, kind, message_type, source, webhook_id, created_at)
@@ -1039,7 +1051,7 @@ app.post("/ghl/webhook", webhookBodyLimit, async (c) => {
           id: randomUUID(), loc: ev.locationId, uid: ev.userId, at: ev.occurredAt, kind: ev.kind,
           messageType: ev.messageType == null ? null : String(ev.messageType).slice(0, 40),
           source: ev.source == null ? null : String(ev.source).slice(0, 60),
-          webhookId: String(webhookId).slice(0, 100), t,
+          webhookId, t,
         }
       );
     }
@@ -1075,6 +1087,9 @@ app.get("/ghl/oauth/callback", async (c) => {
     });
   } catch (e) {
     console.error("[oauth]", e.message, e.status ?? "");
+    if (e.message === "OAUTH_UNREACHABLE") {
+      return c.html(installPage("تعذّر التثبيت", "ما قدرنا نوصل لـ GHL. جرّب تعيد التثبيت بعد شوي."), 504);
+    }
     return c.html(installPage("تعذّر التثبيت", "GHL رفض طلب الربط. أعد تثبيت التطبيق من الـ Marketplace."), 502);
   }
   try {
