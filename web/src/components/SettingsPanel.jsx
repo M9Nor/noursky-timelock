@@ -1,15 +1,29 @@
 import { useEffect, useState } from "react";
 import Button from "./Button.jsx";
 import { useToast } from "./ToastContext.jsx";
+import { formatStamp } from "../time.js";
 
 export default function SettingsPanel({ api }) {
   const [s, setS] = useState(null);
   const [error, setError] = useState("");
+  const [conn, setConn] = useState(null);
+  const [connFailed, setConnFailed] = useState(false);
   const toast = useToast();
 
   useEffect(() => { api.get("/admin/settings").then(setS).catch(() => setError("حدث خطأ، حاول مرة أخرى")); }, []);
+  // The connection status is informative only; a failure never blocks the settings form.
+  useEffect(() => { api.get("/admin/ghl-connection").then(setConn).catch(() => setConnFailed(true)); }, []);
   if (!s && !error) return <div className="panel muted">جارٍ التحميل…</div>;
   if (!s) return <div className="panel error">حدث خطأ، حاول مرة أخرى</div>;
+
+  const connected = Boolean(conn && (conn.last_event_at != null || (conn.installed && conn.has_activity_scope)));
+  const connectionText = connFailed || (!conn && s)
+    ? (connFailed ? "تعذّر فحص حالة الربط مع GHL" : "جارٍ فحص الربط مع GHL…")
+    : connected
+      ? `✓ مربوط — ${conn.last_event_at != null
+        ? `آخر حدث وصل: ${formatStamp(conn.last_event_at, s.timezone)}`
+        : "لسا ما وصل ولا حدث"}${s.activity_monitoring ? ` · وصل ${conn.events_24h} حدث بآخر 24 ساعة` : ""}`
+      : "✗ غير مربوط — أعد تثبيت التطبيق من الـ Marketplace لتتفعّل صلاحية النشاط";
 
   const set = (k) => (e) => setS({ ...s, [k]: e.target.value });
   async function save() {
@@ -30,6 +44,9 @@ export default function SettingsPanel({ api }) {
         break_end: s.break_end || null,
         break_paid: Boolean(s.break_paid),
         note_on_stop: s.note_on_stop ?? "off",
+        activity_monitoring: Boolean(s.activity_monitoring),
+        // Same empty-field rule as the grace: an emptied field means the default.
+        idle_minutes: s.idle_minutes === "" || s.idle_minutes == null ? 30 : Number(s.idle_minutes),
       });
       setS(saved); toast("تم الحفظ");
     } catch (e) {
@@ -40,6 +57,8 @@ export default function SettingsPanel({ api }) {
         : e.code === "INVALID_BREAKS" ? "إعداد الاستراحات غير صحيح"
         : e.code === "INVALID_BREAK_MODE" ? "نوع الاستراحة غير صحيح"
         : e.code === "INVALID_BREAK_WINDOW" ? "وقت الاستراحة غير صحيح (البداية لازم تكون قبل النهاية)"
+        : e.code === "INVALID_IDLE_MINUTES" ? "حد الخمول لازم يكون بين 10 و240 دقيقة"
+        : e.code === "INVALID_ACTIVITY_MONITORING" ? "إعداد مراقبة النشاط غير صحيح"
         : e.code === "INVALID_NOTE_POLICY" ? "إعداد الملاحظة غير صحيح"
         : "حدث خطأ، حاول مرة أخرى");
     }
@@ -79,6 +98,19 @@ export default function SettingsPanel({ api }) {
           <option value="optional">اختيارية</option>
           <option value="required">إلزامية</option>
         </select>
+      </div>
+      <div className="field check">
+        <label><input id="activity-monitoring" type="checkbox" checked={Boolean(s.activity_monitoring)} onChange={(e) => setS({ ...s, activity_monitoring: e.target.checked })} />مراقبة النشاط</label>
+      </div>
+      {s.activity_monitoring && (
+        <div className="field">
+          <label htmlFor="idle-minutes">حد الخمول (دقائق)</label>
+          <input id="idle-minutes" type="number" step="1" min="10" max="240" value={s.idle_minutes ?? 30} onChange={set("idle_minutes")} />
+        </div>
+      )}
+      <div className="field">
+        <p className="hint" role="status" aria-label="حالة الربط مع GHL">{connectionText}</p>
+        <p className="hint">لازم يكون الموظفين عارفين إنه نشاطهم مراقب.</p>
       </div>
       {error && <div className="field"><span className="err">{error}</span></div>}
       <div className="dlg-a"><Button onClick={save}>حفظ</Button></div>

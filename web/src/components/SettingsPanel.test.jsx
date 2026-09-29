@@ -86,4 +86,50 @@ describe("SettingsPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
     expect(await screen.findByText("وقت الاستراحة غير صحيح (البداية لازم تكون قبل النهاية)")).toBeInTheDocument();
   });
+
+  const AW = { timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", late_grace_minutes: 15, note_on_stop: "off", break_mode: "off", activity_monitoring: false, idle_minutes: 30 };
+  const awApi = (settings, connection, put = vi.fn(async (_p, body) => ({ ...settings, ...body }))) => ({
+    get: vi.fn(async (path) => (path === "/admin/ghl-connection" ? connection : settings)),
+    put,
+  });
+
+  it("saves the activity monitoring toggle and idle threshold", async () => {
+    const api = awApi(AW, { installed: true, has_activity_scope: true, last_event_at: null, events_24h: 0 });
+    wrap(<SettingsPanel api={api} />);
+    fireEvent.click(await screen.findByLabelText("مراقبة النشاط"));
+    fireEvent.change(screen.getByLabelText("حد الخمول (دقائق)"), { target: { value: "45" } });
+    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(api.put.mock.calls[0][1]).toEqual(expect.objectContaining({ activity_monitoring: true, idle_minutes: 45 }));
+  });
+
+  it("hides the idle threshold while monitoring is off", async () => {
+    wrap(<SettingsPanel api={awApi(AW, { installed: false, has_activity_scope: false, last_event_at: null, events_24h: 0 })} />);
+    expect(await screen.findByLabelText("مراقبة النشاط")).not.toBeChecked();
+    expect(screen.queryByLabelText("حد الخمول (دقائق)")).not.toBeInTheDocument();
+  });
+
+  it("shows a working connection with the last event time and the 24h count", async () => {
+    const last = Date.UTC(2026, 8, 29, 8, 42) / 1000; // 11:42 in Riyadh
+    wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true }, { installed: true, has_activity_scope: true, last_event_at: last, events_24h: 17 })} />);
+    const status = await screen.findByRole("status", { name: "حالة الربط مع GHL" });
+    await waitFor(() => expect(status.textContent).toContain("مربوط"));
+    expect(status.textContent).toContain("11:42");
+    expect(status.textContent).toContain("17");
+    expect(status.textContent).not.toContain("غير مربوط");
+  });
+
+  it("tells the manager to reinstall when the activity scope is missing", async () => {
+    wrap(<SettingsPanel api={awApi(AW, { installed: true, has_activity_scope: false, last_event_at: null, events_24h: 0 })} />);
+    const status = await screen.findByRole("status", { name: "حالة الربط مع GHL" });
+    await waitFor(() => expect(status.textContent).toContain("غير مربوط"));
+    expect(status.textContent).toContain("أعد تثبيت التطبيق");
+  });
+
+  it("explains an idle threshold out of range", async () => {
+    const put = vi.fn(async () => { throw Object.assign(new Error("x"), { code: "INVALID_IDLE_MINUTES" }); });
+    wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true, idle_minutes: 5 }, { installed: true, has_activity_scope: true, last_event_at: null, events_24h: 0 }, put)} />);
+    fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
+    expect(await screen.findByText("حد الخمول لازم يكون بين 10 و240 دقيقة")).toBeInTheDocument();
+  });
 });
