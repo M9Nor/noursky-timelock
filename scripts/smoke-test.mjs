@@ -787,6 +787,10 @@ await ghlWebhook({ type: "UNINSTALL", locationId: AWLOC, webhookId: `${AWLOC}-un
 check("a signed uninstall marks the location disconnected",
   (await call(AWM, "GET", "/admin/ghl-connection")).body?.installed === false);
 
+const awBig = await ghlWebhook({ type: "OutboundMessage", locationId: AWLOC, pad: "x".repeat(300 * 1024) }, { sign: false });
+check("a webhook over 256 KB → 413 PAYLOAD_TOO_LARGE",
+  awBig.status === 413 && awBig.body?.error === "PAYLOAD_TOO_LARGE", `(${awBig.status} ${JSON.stringify(awBig.body)})`);
+
 await cleanupLocation(AWLOC);
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);

@@ -10,6 +10,7 @@ import { cors } from "hono/cors";
 import mysql from "mysql2/promise";
 import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID } from "node:crypto";
 import { localZone, localDate, wallToUtc, fixedWindows, localDayBounds } from "./tz.js";
+import { bodyLimit } from "hono/body-limit";
 import { verifyGhlSignature, parseWebhook } from "./ghlWebhook.js";
 
 /* ------------------------------------------------------------------ */
@@ -965,9 +966,30 @@ async function purgeOldActivity() {
   await q("DELETE FROM activity_events WHERE occurred_at < :cutoff", { cutoff: now() - ACTIVITY_RETENTION_SEC });
 }
 
-app.post("/ghl/webhook", async (c) => {
+// The cap is enforced before the body is buffered (Content-Length up front, or by stopping
+// a chunked read at the limit), so an oversized unsigned POST cannot exhaust memory.
+const WEBHOOK_DRAIN_MAX_BYTES = 8 * 1024 * 1024;
+const webhookBodyLimit = bodyLimit({
+  maxSize: WEBHOOK_MAX_BYTES,
+  onError: async (c) => {
+    // Discard (never buffer) up to a few MB of the unread upload before answering. Replying
+    // while the client is still sending makes the socket reset, so the client would see
+    // ECONNRESET instead of the 413. Past the drain cap we stop reading and let it close.
+    try {
+      const reader = c.req.raw.body?.getReader();
+      let drained = 0;
+      while (reader && drained < WEBHOOK_DRAIN_MAX_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        drained += value.length;
+      }
+    } catch { /* client went away; answer anyway */ }
+    throw new HttpError(413, "PAYLOAD_TOO_LARGE");
+  },
+});
+
+app.post("/ghl/webhook", webhookBodyLimit, async (c) => {
   const raw = await c.req.text();
-  if (Buffer.byteLength(raw, "utf8") > WEBHOOK_MAX_BYTES) throw new HttpError(413, "PAYLOAD_TOO_LARGE");
   // The signature is the only authentication this route has. The test key is honoured
   // only outside production, like dev-login.
   const allowTestKey = env.NODE_ENV !== "production";
