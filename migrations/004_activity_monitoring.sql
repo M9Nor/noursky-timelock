@@ -1,7 +1,8 @@
 -- 004 · Activity monitoring (phase A creates everything phases A and B need).
 -- Apply BEFORE deploying the activity-monitoring code. Old code keeps working on the
 -- migrated schema (new columns have defaults; new tables are unused by it).
--- schema.sql already includes all of this. Portable across MySQL 8 and MariaDB 10.2+.
+-- schema.sql already includes all of this. Written to be portable across MySQL 8 and MariaDB 10.2+;
+-- run end to end on a pre-004 schema on MySQL 8.0.46 and MariaDB 11.8.9 (10.2 not tested).
 -- Several statements, not re-runnable as a whole: if it stops midway, check
 -- SHOW COLUMNS / SHOW TABLES and run only the remaining statements.
 ALTER TABLE settings
@@ -64,7 +65,8 @@ CREATE TABLE IF NOT EXISTS activity_alerts (
   employee_note_at BIGINT       NULL,
   -- One ongoing idle stretch per session; one open not-clocked-in alert per employee.
   -- 1 while the alert is that kind of open, NULL otherwise (numeric flag, like sessions.open_flag:
-  -- MariaDB 11 rejects string-valued IF() in a STORED generated column). UNIQUE allows many NULLs.
+  -- ERROR 1901 was observed on MariaDB 11.8 for string-valued IF() in a STORED generated column).
+  -- UNIQUE allows many NULLs.
   idle_open_flag   TINYINT GENERATED ALWAYS AS
                      (IF(kind = 'idle' AND status = 'open' AND to_at IS NULL, 1, NULL)) STORED,
   nci_open_flag    TINYINT GENERATED ALWAYS AS

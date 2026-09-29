@@ -682,9 +682,28 @@ check("switching monitoring on saves the threshold and stamps when it started",
   awOn.status === 200 && awOn.body?.activity_monitoring === true && awOn.body?.idle_minutes === 45
     && Math.abs(Number(awOn.body?.activity_monitoring_since) - awOnAt) <= 5,
   `(${JSON.stringify({ m: awOn.body?.activity_monitoring, i: awOn.body?.idle_minutes, s: awOn.body?.activity_monitoring_since })})`);
-const awAgain = await awPolicy({ activity_monitoring: true, idle_minutes: 30 });
-check("saving again while monitoring stays on keeps the original start",
-  awAgain.body?.activity_monitoring_since === awOn.body?.activity_monitoring_since);
+// Backdate the stamp so a restamp-on-every-save regression is visible (two stamps taken
+// milliseconds apart would compare equal).
+const awBackdated = awOnAt - 3600;
+const awBackdate = await withLocalDb((conn) =>
+  conn.execute("UPDATE settings SET activity_monitoring_since = ? WHERE location_id = ?", [awBackdated, AWLOC]));
+if (awBackdate.skipped) {
+  console.log(`  SKIP  monitoring-since stamp checks (${awBackdate.skipped})`);
+} else {
+  const awAgain = await awPolicy({ activity_monitoring: true, idle_minutes: 30 });
+  check("saving again while monitoring stays on keeps the original start",
+    Number(awAgain.body?.activity_monitoring_since) === awBackdated,
+    `(${JSON.stringify({ s: awAgain.body?.activity_monitoring_since, want: awBackdated })})`);
+  const awOff = await awPolicy({ activity_monitoring: false, idle_minutes: 30 });
+  check("switching monitoring off leaves the stamp unchanged",
+    awOff.body?.activity_monitoring === false && Number(awOff.body?.activity_monitoring_since) === awBackdated,
+    `(${JSON.stringify({ m: awOff.body?.activity_monitoring, s: awOff.body?.activity_monitoring_since })})`);
+  const awReOnAt = Math.floor(Date.now() / 1000);
+  const awReOn = await awPolicy({ activity_monitoring: true, idle_minutes: 30 });
+  check("switching monitoring back on restamps the start to now",
+    awReOn.body?.activity_monitoring === true && Math.abs(Number(awReOn.body?.activity_monitoring_since) - awReOnAt) <= 5,
+    `(${JSON.stringify({ s: awReOn.body?.activity_monitoring_since, now: awReOnAt })})`);
+}
 check("idle threshold outside 10–240 → 400",
   (await awPolicy({ activity_monitoring: true, idle_minutes: 5 })).body?.error === "INVALID_IDLE_MINUTES");
 check("non-boolean monitoring toggle → 400",

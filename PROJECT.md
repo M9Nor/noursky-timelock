@@ -247,7 +247,7 @@ role === "admin"  أو  type === "agency"   →  manager
 
 - `ghl_installs` — صف لكل Sub-Account: حالة تثبيت التطبيق (`installed_at` / `uninstalled_at`)، الـ tokens مشفّرة (`access_token_enc`, `refresh_token_enc`)، `scopes`، و`last_event_at` (آخر webhook وصل).
 - `activity_events` — بيانات وصفية بس (النوع، المصدر، الوقت، `webhook_id` فريد لمنع التكرار)، **ولا محتوى** رسالة أو مكالمة. بتنحذف بعد 90 يوم.
-- `activity_alerts` — تنبيهات الخمول و"شغّال بدون تسجيل دخول" (للمرحلة ب). الفريدة `(session_id, idle_open_flag)` و`(location_id, user_id, nci_open_flag)` بتمنع تنبيه مفتوح مكرر؛ الأعمدة `*_open_flag` أرقام generated (مش نصوص) لأن MariaDB 11 بيرفض IF() نصّي بعمود STORED.
+- `activity_alerts` — تنبيهات الخمول و"شغّال بدون تسجيل دخول" (للمرحلة ب). الفريدة `(session_id, idle_open_flag)` و`(location_id, user_id, nci_open_flag)` بتمنع تنبيه مفتوح مكرر؛ الأعمدة `*_open_flag` أرقام generated (مش نصوص) لأن MariaDB 11.8 رفض (ERROR 1901) IF() نصّي بعمود STORED.
 
 ### `edits_log`
 

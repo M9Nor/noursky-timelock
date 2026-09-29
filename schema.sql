@@ -136,7 +136,8 @@ CREATE TABLE IF NOT EXISTS activity_alerts (
   employee_note_at BIGINT       NULL,
   -- One ongoing idle stretch per session; one open not-clocked-in alert per employee.
   -- 1 while the alert is that kind of open, NULL otherwise (numeric flag, like sessions.open_flag:
-  -- MariaDB 11 rejects string-valued IF() in a STORED generated column). UNIQUE allows many NULLs.
+  -- ERROR 1901 was observed on MariaDB 11.8 for string-valued IF() in a STORED generated column).
+  -- UNIQUE allows many NULLs.
   idle_open_flag   TINYINT GENERATED ALWAYS AS
                      (IF(kind = 'idle' AND status = 'open' AND to_at IS NULL, 1, NULL)) STORED,
   nci_open_flag    TINYINT GENERATED ALWAYS AS
