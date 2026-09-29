@@ -115,7 +115,7 @@ describe("SettingsPanel", () => {
     const status = await screen.findByRole("status", { name: "حالة الربط مع GHL" });
     await waitFor(() => expect(status.textContent).toContain("مربوط"));
     expect(status.textContent).toContain("11:42");
-    expect(status.textContent).toContain("17");
+    expect(status.textContent).toContain("17 حدث");
     expect(status.textContent).not.toContain("غير مربوط");
   });
 
@@ -131,5 +131,34 @@ describe("SettingsPanel", () => {
     wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true, idle_minutes: 5 }, { installed: true, has_activity_scope: true, last_event_at: null, events_24h: 0 }, put)} />);
     fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
     expect(await screen.findByText("حد الخمول لازم يكون بين 10 و240 دقيقة")).toBeInTheDocument();
+  });
+
+  it("shows not connected after an uninstall even though an old event time remains", async () => {
+    const last = Date.UTC(2026, 8, 20, 8, 42) / 1000;
+    wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true }, { installed: false, has_activity_scope: true, last_event_at: last, events_24h: 0 })} />);
+    const status = await screen.findByRole("status", { name: "حالة الربط مع GHL" });
+    await waitFor(() => expect(status.textContent).toContain("غير مربوط"));
+    expect(status.textContent).not.toContain("✓ مربوط");
+  });
+
+  it("shows connected when events flow although the scope was not stored", async () => {
+    const last = Date.UTC(2026, 8, 29, 8, 42) / 1000;
+    wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true }, { installed: true, has_activity_scope: false, last_event_at: last, events_24h: 3 })} />);
+    const status = await screen.findByRole("status", { name: "حالة الربط مع GHL" });
+    await waitFor(() => expect(status.textContent).toContain("✓ مربوط"));
+    expect(status.textContent).toContain("3 حدث");
+  });
+
+  it("keeps the settings form usable when the connection status fails", async () => {
+    const api = {
+      get: vi.fn(async (path) => { if (path === "/admin/ghl-connection") throw new Error("boom"); return AW; }),
+      put: vi.fn(),
+    };
+    wrap(<SettingsPanel api={api} />);
+    expect(await screen.findByLabelText("مراقبة النشاط")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /حفظ/ })).toBeInTheDocument();
+    const status = screen.getByRole("status", { name: "حالة الربط مع GHL" });
+    await waitFor(() => expect(status.textContent).toContain("تعذّر فحص حالة الربط مع GHL"));
+    expect(screen.queryByText("حدث خطأ، حاول مرة أخرى")).not.toBeInTheDocument();
   });
 });

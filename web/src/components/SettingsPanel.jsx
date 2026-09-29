@@ -16,13 +16,14 @@ export default function SettingsPanel({ api }) {
   if (!s && !error) return <div className="panel muted">جارٍ التحميل…</div>;
   if (!s) return <div className="panel error">حدث خطأ، حاول مرة أخرى</div>;
 
-  const connected = Boolean(conn && (conn.last_event_at != null || (conn.installed && conn.has_activity_scope)));
+  // last_event_at outlives an uninstall, so it only feeds the sub-text, never "connected".
+  const connected = Boolean(conn && conn.installed && (conn.has_activity_scope || conn.events_24h > 0));
   const connectionText = connFailed || (!conn && s)
     ? (connFailed ? "تعذّر فحص حالة الربط مع GHL" : "جارٍ فحص الربط مع GHL…")
     : connected
       ? `✓ مربوط — ${conn.last_event_at != null
         ? `آخر حدث وصل: ${formatStamp(conn.last_event_at, s.timezone)}`
-        : "لسا ما وصل ولا حدث"}${s.activity_monitoring ? ` · وصل ${conn.events_24h} حدث بآخر 24 ساعة` : ""}`
+        : "لسا ما وصل ولا حدث"}${s.activity_monitoring ? ` · وصل ${conn.events_24h ?? 0} حدث بآخر 24 ساعة` : ""}`
       : "✗ غير مربوط — أعد تثبيت التطبيق من الـ Marketplace لتتفعّل صلاحية النشاط";
 
   const set = (k) => (e) => setS({ ...s, [k]: e.target.value });
