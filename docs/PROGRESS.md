@@ -4,11 +4,9 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `feature/activity-monitoring-a` — activity monitoring **phase A** complete and
-  reviewed, **not yet merged**. `main` (live) has everything up to break modes + the
-  calendar-day "today" total. **Merge is gated on applying
-  `migrations/004_activity_monitoring.sql` to production first** (quiet hour).
-- **Phase A on the branch:** GHL OAuth install callback (tokens stored AES-256-GCM
+- **Branch:** `main` — activity monitoring **phase A** merged and deployed. Migration 004
+  applied to production on 2026-09-30 before the push.
+- **Phase A (live, off by default):** GHL OAuth install callback (tokens stored AES-256-GCM
   encrypted), `POST /ghl/webhook` (Ed25519 `X-GHL-Signature`, 256 KB streaming limit,
   `GHL_APP_ID` filter on install/uninstall, dedupe on `messageId`), activity metadata only
   (who / when / kind / type / source — never content) for locations with
@@ -85,7 +83,8 @@ _(append-only, newest on top: date · summary · files · commit)_
   generated columns — verified end to end on MariaDB 11.8.9 and MySQL 8.0.46). Review
   fixes: streaming body limit, key checked before the one-time code is exchanged,
   production-aware smoke, and the discovery that GHL signs **every** app's webhooks with
-  one key → `GHL_APP_ID` filter + `messageId` dedupe. Not merged — waiting on migration 004.
+  one key → `GHL_APP_ID` filter + `messageId` dedupe. Migration 004 applied 2026-09-30, merged
+  to `main` and pushed.
 - **2026-09-28** · "مجموع اليوم" on the employee screen is now the location's calendar
   day: `/me/status` defaults `since` to local midnight (`localDayBounds`), a session across
   midnight counts only its after-midnight part, and the response carries `day_ends_at` so
