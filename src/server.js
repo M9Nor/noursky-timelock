@@ -1063,7 +1063,8 @@ app.get("/ghl/oauth/callback", async (c) => {
   if (!code) {
     return c.html(installPage("تعذّر التثبيت", "الرابط ناقص. أعد تثبيت التطبيق من الـ Marketplace."), 400);
   }
-  if (!env.GHL_CLIENT_ID || !env.GHL_CLIENT_SECRET || !env.TOKEN_ENC_KEY) {
+  // A malformed key is "not configured": check before the single-use code is spent.
+  if (!env.GHL_CLIENT_ID || !env.GHL_CLIENT_SECRET || !/^[0-9a-f]{64}$/i.test(env.TOKEN_ENC_KEY || "")) {
     return c.html(installPage("تعذّر التثبيت", "الربط مع GHL غير مُعدّ على السيرفر بعد. تواصل مع NourSky."), 503);
   }
   let tok;
@@ -1076,22 +1077,27 @@ app.get("/ghl/oauth/callback", async (c) => {
     console.error("[oauth]", e.message, e.status ?? "");
     return c.html(installPage("تعذّر التثبيت", "GHL رفض طلب الربط. أعد تثبيت التطبيق من الـ Marketplace."), 502);
   }
-  const t = now();
-  await q(
-    `INSERT INTO ghl_installs (location_id, company_id, access_token_enc, refresh_token_enc, token_expires_at,
-                               scopes, installed_at, uninstalled_at, updated_at)
-     VALUES (:loc, :company, :access, :refresh, :expiresAt, :scopes, :t, NULL, :t)
-     ON DUPLICATE KEY UPDATE company_id = VALUES(company_id), access_token_enc = VALUES(access_token_enc),
-                             refresh_token_enc = VALUES(refresh_token_enc), token_expires_at = VALUES(token_expires_at),
-                             scopes = VALUES(scopes), installed_at = VALUES(installed_at),
-                             uninstalled_at = NULL, updated_at = VALUES(updated_at)`,
-    {
-      loc: tok.locationId, company: tok.companyId,
-      access: encryptToken(tok.accessToken, env.TOKEN_ENC_KEY),
-      refresh: tok.refreshToken ? encryptToken(tok.refreshToken, env.TOKEN_ENC_KEY) : null,
-      expiresAt: t + tok.expiresIn, scopes: String(tok.scopes).slice(0, 1000), t,
-    }
-  );
+  try {
+    const t = now();
+    await q(
+      `INSERT INTO ghl_installs (location_id, company_id, access_token_enc, refresh_token_enc, token_expires_at,
+                                 scopes, installed_at, uninstalled_at, updated_at)
+       VALUES (:loc, :company, :access, :refresh, :expiresAt, :scopes, :t, NULL, :t)
+       ON DUPLICATE KEY UPDATE company_id = VALUES(company_id), access_token_enc = VALUES(access_token_enc),
+                               refresh_token_enc = VALUES(refresh_token_enc), token_expires_at = VALUES(token_expires_at),
+                               scopes = VALUES(scopes), installed_at = VALUES(installed_at),
+                               uninstalled_at = NULL, updated_at = VALUES(updated_at)`,
+      {
+        loc: tok.locationId, company: tok.companyId,
+        access: encryptToken(tok.accessToken, env.TOKEN_ENC_KEY),
+        refresh: tok.refreshToken ? encryptToken(tok.refreshToken, env.TOKEN_ENC_KEY) : null,
+        expiresAt: t + tok.expiresIn, scopes: String(tok.scopes).slice(0, 1000), t,
+      }
+    );
+  } catch (e) {
+    console.error("[oauth] store failed", e.message);
+    return c.html(installPage("تعذّر التثبيت", "صار خطأ أثناء حفظ الربط. أعد تثبيت التطبيق من الـ Marketplace."), 500);
+  }
   return c.html(installPage("تم الربط", "تم ربط TimeClock بحسابك. بتقدر تسكّر هالصفحة وترجع لـ GHL."));
 });
 

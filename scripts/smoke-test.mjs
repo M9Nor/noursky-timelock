@@ -795,9 +795,11 @@ check("a webhook over 256 KB → 413 PAYLOAD_TOO_LARGE",
 const awNoCode = await fetch(`${BASE}/ghl/oauth/callback`);
 check("the OAuth callback without a code shows an error page",
   awNoCode.status === 400 && (await awNoCode.text()).includes("أعد تثبيت التطبيق"));
-const awNotConfigured = await fetch(`${BASE}/ghl/oauth/callback?code=test-code`);
-check("the OAuth callback explains when the server is not configured",
-  awNotConfigured.status === 503 && (await awNotConfigured.text()).includes("غير مُعدّ"));
+const awBadCode = await fetch(`${BASE}/ghl/oauth/callback?code=test-code`);
+const awBadCodeText = await awBadCode.text();
+check("the OAuth callback with a bad code shows an Arabic error page (503 unconfigured / 502 refused)",
+  (awBadCode.status === 503 && awBadCodeText.includes("غير مُعدّ")) ||
+  (awBadCode.status === 502 && awBadCodeText.includes("GHL رفض")));
 await cleanupLocation(AWLOC);
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
