@@ -993,7 +993,9 @@ const webhookBodyLimit = bodyLimit({
 // One log line per minute at most, so a flood of bad signatures cannot flood the log.
 let lastBadSignatureLogAt = 0;
 
-app.post("/ghl/webhook", webhookBodyLimit, async (c) => {
+// GHL refuses any URL in the app settings that mentions HighLevel ("ghl"), so the public
+// paths are neutral: /webhooks/events and /oauth/callback.
+app.post("/webhooks/events", webhookBodyLimit, async (c) => {
   const raw = await c.req.text();
   // The signature is the only authentication this route has. The test key is honoured only
   // when NODE_ENV is explicitly "development" or "test" (fails closed otherwise).
@@ -1059,7 +1061,7 @@ app.post("/ghl/webhook", webhookBodyLimit, async (c) => {
   return c.json({ ok: true });
 });
 
-const DEFAULT_REDIRECT_URI = "https://timeclock.noursky.com/ghl/oauth/callback";
+const DEFAULT_REDIRECT_URI = "https://timeclock.noursky.com/oauth/callback";
 
 // A tiny self-contained Arabic page; the texts are fixed strings, never request data.
 function installPage(title, message) {
@@ -1070,7 +1072,7 @@ main{max-width:460px;background:#fff;border:1px solid #E3E0F0;border-radius:14px
 </head><body><main><h1>${title}</h1><p>${message}</p></main></body></html>`;
 }
 
-app.get("/ghl/oauth/callback", async (c) => {
+app.get("/oauth/callback", async (c) => {
   const code = c.req.query("code");
   if (!code) {
     return c.html(installPage("تعذّر التثبيت", "الرابط ناقص. أعد تثبيت التطبيق من الـ Marketplace."), 400);

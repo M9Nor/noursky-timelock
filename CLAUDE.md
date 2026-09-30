@@ -115,7 +115,7 @@ BASE_URL=http://localhost:3000 GHL_SHARED_SECRET=<same-as-.env> npm run test:smo
 - Every `/admin/*` route uses `authed, managerOnly`.
 - Any dev-only auth bypass must be gated by `NODE_ENV !== "production"`. The webhook test
   signing key is stricter (fails closed): accepted only when `NODE_ENV` is `development` or `test`.
-- `/ghl/webhook` and `/ghl/oauth/callback` are the only unauthenticated write routes — the
+- `/webhooks/events` and `/oauth/callback` are the only unauthenticated write routes — the
   webhook is authenticated only by GHL's signature (test key only in development/test), the
   callback only by the code exchange.
 - **Never commit secrets, `.env` files, credentials, or Hostinger login data.**

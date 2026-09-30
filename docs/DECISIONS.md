@@ -159,3 +159,9 @@ currently trigger a harmless rebuild.
 - **Reason:** avoid unnecessary rebuilds from documentation-only changes.
 - **Rejected:** a GitHub Actions deploy with `paths-ignore` (would replace Hostinger's
   built-in Git deploy — larger change than warranted now). Revisit if rebuilds become costly.
+
+## 2026-09-30 — Neutral public paths for the GHL webhook and OAuth callback
+- **Decision:** `POST /ghl/webhook` → `POST /webhooks/events`, `GET /ghl/oauth/callback` → `GET /oauth/callback`.
+- **Reason:** the GHL Marketplace app settings reject any redirect/webhook URL that mentions HighLevel ("ghl"),
+  so the old paths could not be registered. Nothing was registered or installed on the old paths yet, so no alias is kept.
+- **Rejected:** a subdomain or query-string trick to keep the old names — more moving parts, same result.
