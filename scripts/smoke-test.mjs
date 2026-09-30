@@ -123,7 +123,7 @@ async function ghlWebhook(payload, { sign = true, tamper = false } = {}) {
   const raw = JSON.stringify(payload);
   const headers = { "Content-Type": "application/json" };
   if (sign) headers["X-GHL-Signature"] = signTestWebhook(raw);
-  const r = await fetch(`${BASE}/ghl/webhook`, { method: "POST", headers, body: tamper ? raw.replace(/}$/, ',"x":1}') : raw });
+  const r = await fetch(`${BASE}/webhooks/events`, { method: "POST", headers, body: tamper ? raw.replace(/}$/, ',"x":1}') : raw });
   let body; try { body = await r.json(); } catch { body = null; }
   return { status: r.status, body };
 }
@@ -831,10 +831,10 @@ check("a webhook over 256 KB → 413 PAYLOAD_TOO_LARGE",
   awBig.status === 413 && awBig.body?.error === "PAYLOAD_TOO_LARGE", `(${awBig.status} ${JSON.stringify(awBig.body)})`);
 
 // OAuth callback. The local .env has no GHL_CLIENT_ID, so a code cannot be exchanged here.
-const awNoCode = await fetch(`${BASE}/ghl/oauth/callback`);
+const awNoCode = await fetch(`${BASE}/oauth/callback`);
 check("the OAuth callback without a code shows an error page",
   awNoCode.status === 400 && (await awNoCode.text()).includes("أعد تثبيت التطبيق"));
-const awBadCode = await fetch(`${BASE}/ghl/oauth/callback?code=test-code`);
+const awBadCode = await fetch(`${BASE}/oauth/callback?code=test-code`);
 const awBadCodeText = await awBadCode.text();
 check("the OAuth callback with a bad code shows an Arabic error page (503 unconfigured / 502 refused)",
   (awBadCode.status === 503 && awBadCodeText.includes("غير مُعدّ")) ||

@@ -7,7 +7,7 @@ _(overwrite each update)_
 - **Branch:** `main` — activity monitoring **phase A** merged and deployed. Migration 004
   applied to production on 2026-09-30 before the push.
 - **Phase A (live, off by default):** GHL OAuth install callback (tokens stored AES-256-GCM
-  encrypted), `POST /ghl/webhook` (Ed25519 `X-GHL-Signature`, 256 KB streaming limit,
+  encrypted), `POST /webhooks/events` (Ed25519 `X-GHL-Signature`, 256 KB streaming limit,
   `GHL_APP_ID` filter on install/uninstall, dedupe on `messageId`), activity metadata only
   (who / when / kind / type / source — never content) for locations with
   `activity_monitoring = 1`, 90-day retention, `GET /admin/ghl-connection`, settings

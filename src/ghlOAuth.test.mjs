@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { exchangeCode, GHL_TOKEN_URL } from "./ghlOAuth.js";
 
-const args = { code: "abc", clientId: "cid", clientSecret: "secret", redirectUri: "https://timeclock.noursky.com/ghl/oauth/callback" };
+const args = { code: "abc", clientId: "cid", clientSecret: "secret", redirectUri: "https://timeclock.noursky.com/oauth/callback" };
 const fakeFetch = (status, json, seen) => async (url, init) => {
   seen?.push({ url, init });
   return { ok: status >= 200 && status < 300, status, json: async () => json };

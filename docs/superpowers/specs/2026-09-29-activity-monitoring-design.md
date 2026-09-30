@@ -56,8 +56,8 @@ audit-log endpoint (see §1.2).
 | Setting | Value |
 |---|---|
 | Scope added | `conversations/message.readonly` (read-only; no write scope) |
-| Webhook URL | `https://timeclock.noursky.com/ghl/webhook` · subscribe `OutboundMessage` (+ app install/uninstall events, delivered by default) |
-| Redirect URL (OAuth) | `https://timeclock.noursky.com/ghl/oauth/callback` |
+| Webhook URL | `https://timeclock.noursky.com/webhooks/events` · subscribe `OutboundMessage` (+ app install/uninstall events, delivered by default) |
+| Redirect URL (OAuth) | `https://timeclock.noursky.com/oauth/callback` |
 
 Each client Sub-Account must **reinstall once** and accept the new scope. Until then the
 account works exactly as today.
@@ -118,7 +118,7 @@ NULL means "not monitored during this session" and is shown as "—", never as z
 
 ## 5. Server behaviour
 
-### 5.1 `POST /ghl/webhook`
+### 5.1 `POST /webhooks/events`
 1. Read the raw body (max 256 KB, else `413 PAYLOAD_TOO_LARGE`); verify `X-GHL-Signature`
    (Ed25519, GHL public key). Invalid → `401`, nothing stored (one content-free warning line
    per minute at most is logged). **A valid signature proves the event came from GHL, not that
@@ -140,7 +140,7 @@ NULL means "not monitored during this session" and is shown as "—", never as z
 
 Unsigned requests never write anything. Correctly signed install/uninstall events are recorded for any location, provided they carry our `appId` (when `GHL_APP_ID` is set): the signature proves the event is from GHL, not that it is for our app.
 
-### 5.2 `GET /ghl/oauth/callback?code=`
+### 5.2 `GET /oauth/callback?code=`
 Exchange the code at `https://services.leadconnectorhq.com/oauth/token`
 (`authorization_code`), store encrypted tokens in `ghl_installs`, render a short Arabic
 confirmation page. A failed exchange shows an Arabic error page and stores nothing.
