@@ -206,4 +206,19 @@ describe("SettingsPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
     expect(await screen.findByText("نهاية الدوام غير صحيحة (لازم تكون بعد البداية)")).toBeInTheDocument();
   });
+
+  it("maps each weekday box to its bit (Saturday off = 63, Sunday off = 126)", async () => {
+    for (const [day, expected] of [["السبت", 63], ["الأحد", 126]]) {
+      const api = {
+        get: vi.fn(async (p) => (p === "/admin/settings" ? WH : { installed: false })),
+        put: vi.fn(async (_p, b) => ({ ...WH, ...b })),
+      };
+      const { unmount } = wrap(<SettingsPanel api={api} />);
+      fireEvent.click(await screen.findByLabelText(day));
+      fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+      await waitFor(() => expect(api.put).toHaveBeenCalled());
+      expect(api.put.mock.calls[0][1].work_days).toBe(expected);
+      unmount();
+    }
+  });
 });
