@@ -40,6 +40,7 @@ web/                     # React + Vite SPA (source of the UI)
   src/api.js             # fetch wrapper: bearer token, ApiError, api.download (authed CSV)
   src/auth.js            # GHL postMessage SSO handshake + dev-login
   src/time.js            # server-time offset + duration/clock formatting (Western digits)
+  src/alertTitle.js       # ⚠️ tab-title hook while an alert is shown
   src/styles.css         # NourSky design system (light theme, class-based)
   src/components/        # Icon, Button, Toast, TopBar, EmployeeScreen, KpiRow, LiveFloor,
                          #   ReportPanel, SessionEditModal, SettingsPanel, ManagerDashboard,

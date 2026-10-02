@@ -194,7 +194,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | `break_paid` | TINYINT(1) | 0 | إذا 1، الاستراحة الثابتة ما بتنخصم من وقت العمل |
 | `break_policy_since` | BIGINT NULL | `NULL` | UNIX seconds لآخر مرة تغيّرت فيها سياسة الاستراحة (`break_mode` أو `break_start` أو `break_end` أو `break_paid`) — `PUT /admin/settings` بيحطها `now` بس لما وحدة من هدول تتغير، وإلا بتضل متل ما هي. أي نافذة ثابتة بلّشت **قبلها** ما بتنسجل أبداً (السياسة بتسري من لحظة الحفظ، مش على نوافذ سابقة). `NULL` = بدون قيد (حسابات ما غيّرت السياسة من بعد migration 003) |
 | `activity_monitoring` | TINYINT(1) | 0 | مراقبة النشاط من GHL، مطفاية افتراضياً |
-| `idle_minutes` | INT | 30 | حد الخمول بالدقائق (1–240)، بيستخدمه الكشف بالمرحلة ب |
+| `idle_minutes` | INT | 30 | حد الخمول بالدقائق (1–240)، بيستخدمه تنبيه الخمول (مرحلة ج) وشارة الخمول الحية |
 | `activity_monitoring_since` | BIGINT NULL | `NULL` | UNIX seconds لوقت آخر تفعيل للمراقبة؛ الخمول ما بينحسب من قبله. `PUT /admin/settings` بيحطها `now` لما المراقبة تنتقل من مطفاية لمفعّلة |
 | `note_on_stop` | ENUM(`off`,`optional`,`required`) | `off` | سياسة الملاحظة عند إنهاء الدوام |
 | `max_session_hours` | DECIMAL(4,2) | 12 | حد الإغلاق التلقائي |
