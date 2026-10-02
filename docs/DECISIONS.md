@@ -183,3 +183,14 @@ currently trigger a harmless rebuild.
 - **Rejected:** keeping the old key (secret lost); a minor version (GHL disallows it for scope changes).
 - **Note:** in hPanel, "Add environment variable" only stages a change — it is saved by **Apply changes**,
   followed by a redeploy.
+
+## 2026-10-02 — Phase B: one alert, idle as information, absent settings fields are kept
+- **Decision:** phase B raises only "working, not clocked in", and only inside working hours
+  (`work_start`–`work_end` on `work_days`, location time). Idle time is shown (live chip, session
+  columns) but never alerts; the idle alert and "end at last activity" are deferred (spec §11).
+  `PUT /admin/settings` keeps any field absent from the body.
+- **Reason:** on Innova only Instagram and Email reach us, so silence is weak evidence; an alert with
+  an "end session" button is the closest thing to a pay deduction. Out-of-hours work is not the
+  manager's concern (owner). "Absent = keep" stops an older page from resetting newer fields.
+- **Rejected:** the 2026-09-29 idle alert as drafted; deriving the end of day from `daily_target_hours`
+  (approximate); a 3-events-in-30-minutes trigger (owner preferred working hours).
