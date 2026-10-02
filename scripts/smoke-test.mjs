@@ -869,10 +869,9 @@ const NCM = ncMgr.body?.token, NC1 = ncE1.body?.token, NC2 = ncE2.body?.token;
 const ncNow = Math.floor(Date.now() / 1000);
 const ncTod = ncNow % 86400;
 let ncSeq = 0;
-const ncEvent = (userId, at = Math.floor(Date.now() / 1000)) => {
-  ncSeq++;
+const ncEvent = (userId, at = Math.floor(Date.now() / 1000), key = ++ncSeq) => {
   const p = { type: "OutboundMessage", locationId: NCLOC, messageType: "SMS", source: "app",
-    dateAdded: new Date(at * 1000).toISOString(), webhookId: `${NCLOC}-w${ncSeq}`, messageId: `${NCLOC}-m${ncSeq}` };
+    dateAdded: new Date(at * 1000).toISOString(), webhookId: `${NCLOC}-w${key}`, messageId: `${NCLOC}-m${key}` };
   if (userId) p.userId = userId;
   return ghlWebhook(p);
 };
@@ -915,6 +914,9 @@ if (!awAcceptsTestKey) {
   await ncEvent(`${NCLOC}-u2`, ncNow - 2700);
   check("an event inside a session that covers its time opens nothing",
     ncPinned && (await ncOpenFor(`${NCLOC}-u2`)).length === 0, `(pinned ${ncPinned})`);
+  await ncEvent(`${NCLOC}-u2`, ncNow - 5400);
+  check("an event timed before a session that already ended opens nothing (late delivery)",
+    (await ncOpenFor(`${NCLOC}-u2`)).length === 0, `(${JSON.stringify(await ncOpenFor(`${NCLOC}-u2`))})`);
 
   // A one-hour window twelve hours away from now cannot contain now.
   const ncFarH = String((Math.floor(ncTod / 3600) + 12) % 24).padStart(2, "0");
@@ -928,7 +930,7 @@ if (!awAcceptsTestKey) {
   await ncEvent(`${NCLOC}-u2`);
   check("without a work_end nothing opens", (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
   await ncHours({});
-  await ncEvent(`${NCLOC}-u2`);
+  await ncEvent(`${NCLOC}-u2`, Math.floor(Date.now() / 1000), 9001);
   check("the same employee inside working hours does get an alert (the checks above are not vacuous)",
     (await ncOpenFor(`${NCLOC}-u2`)).length === 1);
 
@@ -963,6 +965,9 @@ if (!awAcceptsTestKey) {
   check("dismissing it again → 404", (await call(NCM, "POST", `/admin/alerts/${ncA2?.id}/dismiss`)).body?.error === "ALERT_NOT_FOUND");
   check("a note on a dismissed alert → 404",
     (await call(NC2, "POST", `/me/alerts/${ncA2?.id}/note`, { note: "متأخر" })).body?.error === "ALERT_NOT_FOUND");
+  await ncEvent(`${NCLOC}-u2`, Math.floor(Date.now() / 1000), 9001); // GHL redelivers the same message
+  check("a duplicate delivery of the event that opened a dismissed alert opens nothing",
+    (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
   await cleanupLocation(`${NCLOC}-x`);
 
   await call(NC1, "POST", "/session/start");
@@ -1024,16 +1029,42 @@ if (!awAcceptsTestKey || idBack.skipped) {
   const idCsv = await call(IDM, "GET", `/admin/export.csv?from=${idT - 86400}&to=${idT + 60}`);
   check("the CSV has the activity columns", String(idCsv.body).includes("Longest idle (min)"));
 
+  const idEditEnd = Math.floor(Date.now() / 1000);
   const idEdit = await call(IDM, "PATCH", `/admin/sessions/${idS?.id}`,
-    { started_at: idT - 600, ended_at: idT + 0, reason: "تقصير للاختبار" });
+    { started_at: idEditEnd - 600, ended_at: idEditEnd, reason: "تقصير للاختبار" });
   const idS2 = (await call(IDM, "GET", `/admin/sessions?from=${idT - 86400}&to=${idT + 60}&user_id=${IDLOC}-u1`)).body?.sessions?.[0];
   check("a manager edit recomputes the summary",
-    idEdit.status === 200 && Number(idS2?.longest_idle_sec) <= 600, `(${JSON.stringify(idS2)})`);
+    idEdit.status === 200 && idS2?.longest_idle_sec != null && idS2.longest_idle_sec <= 600
+      && idS2?.activity_count === 1, `(${JSON.stringify(idS2)})`);
 
   await localRows("DELETE FROM activity_events WHERE location_id = :loc", { loc: IDLOC });
   await call(IDE, "POST", "/session/start");
   check("with no event in 24 hours idle is not shown", (await idMe())?.idle_sec === null);
   await call(IDE, "POST", "/session/stop");
+  const idSilent = (await call(IDM, "GET", `/admin/sessions?from=${idT - 86400}&to=${idEditEnd + 600}&user_id=${IDLOC}-u1`)).body?.sessions
+    ?.find((x) => x.id !== idS?.id);
+  check("with no event at the location in the 24 h before it ended, a stopped session keeps a null summary",
+    idSilent && idSilent.ended_at != null && idSilent.activity_count == null && idSilent.longest_idle_sec == null,
+    `(${JSON.stringify(idSilent)})`);
+
+  // A manager edit refills the summary however old the session is (summaries are kept forever).
+  const idOldStart = idT - 10 * 86400;
+  await localRows("UPDATE settings SET activity_monitoring_since = :s WHERE location_id = :loc", { s: idT - 20 * 86400, loc: IDLOC });
+  await localRows(
+    `UPDATE sessions SET started_at = :s, ended_at = :e, duration_sec = 3600, activity_count = NULL,
+            last_activity_at = NULL, longest_idle_sec = NULL WHERE id = :id`,
+    { s: idOldStart, e: idOldStart + 3600, id: idSilent?.id });
+  await localRows(
+    `INSERT INTO activity_events (id, location_id, user_id, occurred_at, kind, message_type, source, webhook_id, created_at)
+     VALUES (:id, :loc, :uid, :at, 'message', 'SMS', 'app', :wh, :t)`,
+    { id: crypto.randomUUID(), loc: IDLOC, uid: `${IDLOC}-u1`, at: idOldStart + 1800, wh: `${IDLOC}-old-w`, t: idT });
+  const idOldEdit = await call(IDM, "PATCH", `/admin/sessions/${idSilent?.id}`,
+    { started_at: idOldStart + 600, ended_at: idOldStart + 3000, reason: "تعديل جلسة قديمة" });
+  const idOld = (await call(IDM, "GET", `/admin/sessions?from=${idOldStart - 86400}&to=${idOldStart + 86400}&user_id=${IDLOC}-u1`)).body?.sessions
+    ?.find((x) => x.id === idSilent?.id);
+  check("a manager edit of a session that ended over 7 days ago still stores its summary",
+    idOldEdit.status === 200 && idOld?.activity_count === 1 && idOld?.longest_idle_sec != null,
+    `(${JSON.stringify(idOld)})`);
 
   await call(IDM, "PUT", "/admin/settings", { activity_monitoring: false });
   check("with monitoring off live has no idle threshold", (await idLive())?.idle_minutes === null);

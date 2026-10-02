@@ -194,3 +194,16 @@ currently trigger a harmless rebuild.
   manager's concern (owner). "Absent = keep" stops an older page from resetting newer fields.
 - **Rejected:** the 2026-09-29 idle alert as drafted; deriving the end of day from `daily_target_hours`
   (approximate); a 3-events-in-30-minutes trigger (owner preferred working hours).
+
+## 2026-10-02 — Phase B review refinements: stale-proof alert, guarded summaries
+- **Decision:** the not-clocked-in alert opens with one `INSERT IGNORE ... SELECT ... WHERE NOT EXISTS`
+  and the rule is "no session open, and none ending after the event" (was: none covering it); a
+  duplicate delivery (nothing stored) skips the alert step. A stored session summary needs at least one
+  event at the location in the 24 h before the session ended, else it stays NULL. A manager edit refills
+  that session's summary directly, at any age, if monitoring was ever on there.
+- **Reason:** a separate read then insert let a clock-in racing the event leave a stale open alert, and a
+  late or repeated delivery of an old event could open one after the shift ended. Without the guard an
+  outage (location not on 2.0.0, GHL down) was stored forever as "0 activity, long idle". The periodic
+  pass only looks 7 days back, so an edit of an older session left "—" for good.
+- **Rejected:** keeping the "covering" rule with a re-check after insert (still racy); a time window on
+  the edit refill (summaries are kept forever); recomputing stored summaries when events arrive late.

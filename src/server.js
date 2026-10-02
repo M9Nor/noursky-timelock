@@ -308,6 +308,41 @@ async function eventTimes(loc, uid, from, to) {
 }
 
 /**
+ * Computes and stores one closed session's activity summary (spec §5.6). Used for every
+ * close path via summarizeClosedSessions, and directly after a manager edit, which must
+ * refill the summary however old the session is (summaries are kept forever). A location
+ * that never had monitoring has no activity_monitoring_since, and sessionSummary returns
+ * null for a session monitoring did not cover. Outage guard: with no event at all at the
+ * location in the 24 h before the session ended, the summary stays NULL ("—") instead of
+ * being stored as "0 activity, long idle" — the location may not send events (not updated
+ * to the 2.0.0 app, a GHL outage).
+ */
+async function summarizeSession(loc, st, session) {
+  if (st?.activity_monitoring_since == null) return;
+  const since = Number(st.activity_monitoring_since);
+  const start = Number(session.started_at), end = Number(session.ended_at);
+  const [fresh] = await q(
+    `SELECT 1 AS ok FROM activity_events
+      WHERE location_id = :loc AND occurred_at > :from AND occurred_at <= :end LIMIT 1`,
+    { loc, from: end - 86400, end }
+  );
+  if (!fresh) return;
+  const sum = sessionSummary({
+    startedAt: start, endedAt: end, monitoringSince: since,
+    eventTimes: await eventTimes(loc, session.user_id, start, end),
+    breaks: await sessionBreaks(session, st, end),
+  });
+  if (!sum) return;
+  // Only if the row still has the bounds read above: a concurrent manager edit nulls the
+  // summary and changes them, and must not be overwritten with a summary of the old bounds.
+  await q(
+    `UPDATE sessions SET activity_count = :n, last_activity_at = :last, longest_idle_sec = :idle
+      WHERE id = :id AND activity_count IS NULL AND started_at = :s AND ended_at = :e`,
+    { n: sum.activity_count, last: sum.last_activity_at, idle: sum.longest_idle_sec, id: session.id, s: start, e: end }
+  );
+}
+
+/**
  * Stores the activity summary (spec §5.6) of recently closed sessions that have none, for
  * locations with monitoring on. Every close path ends up here — /session/stop, auto-close,
  * and a manager edit (which clears the summary first) — so the rule lives in one place.
@@ -332,22 +367,7 @@ async function summarizeClosedSessions(loc = null) {
           LIMIT 50`,
         { loc: l, since, recent: t - 7 * 86400, scanFrom: t - 9 * 86400 }
       );
-      for (const s of rows) {
-        const start = Number(s.started_at), end = Number(s.ended_at);
-        const sum = sessionSummary({
-          startedAt: start, endedAt: end, monitoringSince: since,
-          eventTimes: await eventTimes(l, s.user_id, start, end),
-          breaks: await sessionBreaks(s, st, end),
-        });
-        if (!sum) continue;
-        // Only if the row still has the bounds read above: a concurrent manager edit nulls the
-        // summary and changes them, and must not be overwritten with a summary of the old bounds.
-        await q(
-          `UPDATE sessions SET activity_count = :n, last_activity_at = :last, longest_idle_sec = :idle
-            WHERE id = :id AND activity_count IS NULL AND started_at = :s AND ended_at = :e`,
-          { n: sum.activity_count, last: sum.last_activity_at, idle: sum.longest_idle_sec, id: s.id, s: start, e: end }
-        );
-      }
+      for (const s of rows) await summarizeSession(l, st, s);
     } catch (e) {
       console.error("[activity-summary]", l, e);
     }
@@ -378,8 +398,12 @@ async function liveActivity(loc, st, employees, t) {
   for (const e of employees) {
     if (!e.session_id) continue;
     const start = Number(e.started_at);
-    const times = await eventTimes(loc, e.user_id, start, t);
-    const lastEventAt = times.length ? Math.max(...times) : null;
+    const [last] = await q(
+      `SELECT MAX(occurred_at) AS at FROM activity_events
+        WHERE location_id = :loc AND user_id = :uid AND occurred_at >= :from AND occurred_at <= :t`,
+      { loc, uid: e.user_id, from: start, t }
+    );
+    const lastEventAt = last?.at == null ? null : Number(last.at);
     const row = out.get(e.user_id);
     row.last_activity_at = lastEventAt;
     row.idle_sec = idleSeconds({
@@ -962,7 +986,10 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
       }
     );
     await conn.commit();
-    await summarizeClosedSessions(loc).catch((e) => console.error("[activity-summary]", e));
+    // The edit cleared the summary: refill it whatever the session's age (the periodic pass
+    // only looks at recent ones), as long as monitoring was ever on here.
+    await summarizeSession(loc, st, { id, user_id: old.user_id, started_at: s, ended_at: e })
+      .catch((err) => console.error("[activity-summary]", err));
     return c.json({ id, started_at: s, ended_at: e, duration_sec: e - s, closed_by: "admin" });
   } catch (err) {
     await conn.rollback().catch(() => {});
@@ -1161,7 +1188,9 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   // break_policy_since moves to now only when the break policy itself changes. It is
   // assigned FIRST so it compares against the stored values: MySQL evaluates single-table
   // SET assignments left to right (MariaDB may use the old values throughout) — both see
-  // the old break_* columns here. One statement, so no read-then-write race.
+  // the old break_* columns here. The break_policy_since comparison is one statement; the
+  // settings were read before it, so two concurrent partial saves can lose one (acceptable:
+  // the app always sends the whole form).
   await q(
     `UPDATE settings SET break_policy_since = IF(break_mode <=> :breakMode AND break_start <=> :breakStart
                                                   AND break_end <=> :breakEnd AND break_paid <=> :breakPaid,
@@ -1229,7 +1258,7 @@ let loggedForeignAppId = false;
 /**
  * Opens a "working, not clocked in" alert for one stored event when every rule of spec §5.3
  * holds: fresh event, inside working hours, an employee (not a manager) we know, and no
- * session open or covering the event. ux_alert_nci_open keeps one open alert per employee,
+ * session open or ending after the event. ux_alert_nci_open keeps one open alert per employee,
  * so a burst of events — or two concurrent deliveries — opens exactly one (INSERT IGNORE).
  */
 async function openNotClockedInAlert(st, loc, uid, at, t) {
@@ -1240,17 +1269,14 @@ async function openNotClockedInAlert(st, loc, uid, at, t) {
     { loc, uid }
   );
   if (!emp) return;
-  const [busy] = await q(
-    `SELECT 1 AS ok FROM sessions
-      WHERE location_id = :loc AND user_id = :uid
-        AND (ended_at IS NULL OR (started_at <= :at AND ended_at > :at))
-      LIMIT 1`,
-    { loc, uid, at }
-  );
-  if (busy) return;
+  // One statement, so a clock-in racing this event cannot leave a stale alert: nothing opens
+  // while a session is open or when one ended after the event time (a late or repeated
+  // delivery of an event from a shift that is already over).
   await q(
     `INSERT IGNORE INTO activity_alerts (id, location_id, user_id, session_id, kind, from_at, detected_at, status)
-     VALUES (:id, :loc, :uid, NULL, 'working_not_clocked_in', :at, :t, 'open')`,
+     SELECT :id, :loc, :uid, NULL, 'working_not_clocked_in', :at, :t, 'open' FROM DUAL
+      WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE location_id = :loc AND user_id = :uid
+                          AND (ended_at IS NULL OR ended_at > :at))`,
     { id: randomUUID(), loc, uid, at, t }
   );
 }
@@ -1313,7 +1339,7 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
       // GHL retries a failed delivery up to 12 times, and the same message can arrive again
       // through another app with a new webhookId: the key prefers the message id.
       const webhookId = activityDedupeKey(ev, raw);
-      await q(
+      const stored = await q(
         `INSERT IGNORE INTO activity_events
            (id, location_id, user_id, occurred_at, kind, message_type, source, webhook_id, created_at)
          VALUES (:id, :loc, :uid, :at, :kind, :messageType, :source, :webhookId, :t)`,
@@ -1324,8 +1350,9 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
           webhookId, t,
         }
       );
-      // Only an event with a user id is a person's activity (spec §2.1).
-      if (ev.userId) await openNotClockedInAlert(st, ev.locationId, String(ev.userId), ev.occurredAt, t);
+      // Only an event with a user id is a person's activity (spec §2.1). A duplicate delivery
+      // (nothing stored) opens nothing: its first delivery already did, or was dismissed.
+      if (ev.userId && stored.affectedRows > 0) await openNotClockedInAlert(st, ev.locationId, String(ev.userId), ev.occurredAt, t);
     }
   }
   return c.json({ ok: true });

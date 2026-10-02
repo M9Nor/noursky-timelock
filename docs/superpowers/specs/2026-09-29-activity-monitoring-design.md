@@ -249,7 +249,9 @@ manager edit), and recomputed when a manager edits a closed session, only if mon
 was on for any part of it. Only counted events (with `user_id`) are used:
 `activity_count`, `last_activity_at`, and `longest_idle_sec` = the longest gap between
 consecutive points {start, events…, end}, **with break time (employee and fixed)
-removed from each gap**.
+removed from each gap**. Outage guard: if no event at all reached the location in the 24 h
+before the session ended, the summary is left empty (null, shown "—") rather than stored as
+"0 activity". A manager edit refills the summary whatever the session's age.
 
 ### 5.7 Retention
 Every 15 minutes (timer) and lazily: `DELETE FROM activity_events WHERE occurred_at < now − 90 days` (the lazy run is on `GET /admin/ghl-connection`).
