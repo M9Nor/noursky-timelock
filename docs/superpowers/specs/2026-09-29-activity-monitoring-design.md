@@ -1,14 +1,23 @@
 # NourSky TimeClock — Activity Monitoring (Design Spec)
 
-**Date:** 2026-09-29 · **Status:** approved in brainstorming, not yet implemented
+**Date:** 2026-09-29 · **Revised:** 2026-10-02 (phase B scope, after the Innova verification)
+**Status:** phase A live; phase B approved in brainstorming, not yet implemented
 **Owner decision:** activity from GHL is used as **evidence and alerts**, never as the clock.
+
+> **2026-10-02 revision.** Innova only delivers Instagram and Email today, so a quiet
+> stretch is weak evidence. Phase B therefore ships **one** alert — *working, not clocked
+> in*, inside working hours only — and shows idle time as **information** (live-floor chip
+> and session columns), never as an alert. The idle alert, "end at last activity" and the
+> employee idle banner are deferred (§11). New settings `work_end` and `work_days` define
+> working hours (migration 005).
 
 ## 1. Goal
 
 Help managers catch the two failures manual clock-in cannot see on its own:
 
-1. an employee is **working in GHL but never clocked in** (forgot to start);
-2. an employee **clocked in but shows no activity** for a long stretch (idle, or forgot to stop).
+1. an employee is **working in GHL but never clocked in** (forgot to start) — an alert;
+2. an employee **clocked in but shows no activity** for a long stretch (idle, or forgot to
+   stop) — shown to the manager as information in phase B; an alert later (§11).
 
 Manual start/stop stays the record of truth for hours and pay. Activity only raises
 alerts, marks sessions for review, and gives the manager one-click corrections that
@@ -131,6 +140,14 @@ after the previous is resolved, e.g. the employee stops and later works again un
 - `activity_monitoring_since` BIGINT NULL — set when monitoring is switched on; idle is
   never measured from before it.
 
+`settings` (migration **005**, phase B):
+- `work_end` CHAR(5) NULL — `HH:MM`, location timezone, same format as `work_start`;
+  must be later than `work_start` on the same day (no overnight hours). NULL by default:
+  until the manager sets it, no not-clocked-in alerts are raised.
+- `work_days` TINYINT UNSIGNED NOT NULL DEFAULT 127 — bitmask of working weekdays in the
+  location's timezone, bit 0 = Sunday … bit 6 = Saturday (JavaScript `getDay()` order).
+  Allowed 1–127. Default = every day.
+
 `sessions` (the per-session summary, kept forever):
 - `activity_count` INT NULL
 - `last_activity_at` BIGINT NULL
@@ -167,43 +184,69 @@ Exchange the code at `https://services.leadconnectorhq.com/oauth/token`
 (`authorization_code`), store encrypted tokens in `ghl_installs`, render a short Arabic
 confirmation page. A failed exchange shows an Arabic error page and stores nothing.
 
-### 5.3 Detector
-Runs on its own **60-second timer** and lazily before manager reads
-(`/admin/live`, `/admin/alerts`). Only for locations with monitoring on **and** at least
-one webhook received in the last 24 hours (so a GHL outage never turns into idle alerts).
+### 5.3 Detection (phase B)
+No timer: the alert is decided **when an event is stored** (inside `POST /webhooks/events`),
+and idle time is computed **when it is read**. The pure rules live in a new module
+`src/activity.js` (no database, unit-tested, same pattern as `src/tz.js`).
 
-- **Idle:** for each open session, last activity = the latest of
-  `session.started_at`, `activity_monitoring_since`, and the employee's last
-  `activity_events.occurred_at` in the session. Clocking in counts as activity.
-  If `now − last activity > idle_minutes × 60` and the employee is **not** on an
-  employee break or inside a fixed break window → open an `idle` alert
-  (`from_at` = last activity).
-- **Idle resumes:** when a later event arrives for that session, set `to_at` on the
-  open idle alert. The alert stays open for the manager.
-- **Late event:** if an event arrives whose `occurred_at` falls inside an alert's
-  idle gap and closes the gap below the threshold → the alert is resolved by `system`
-  with resolution `late_activity`.
-- **Working, not clocked in:** an event for an employee with no open session and no
-  session covering `occurred_at`, and no open not-clocked-in alert already → open one
-  (`from_at` = first such activity). Resolved by `system` (`clocked_in`) when the
-  employee starts a session.
+**What counts as a person's activity:** an `activity_events` row **with** a `user_id`
+(§2.1). Rows without one are kept for 90 days but never count.
+
+**Working, not clocked in** — after an event is stored, open a
+`working_not_clocked_in` alert (`from_at` = the event's `occurred_at`) when **all** hold:
+1. the event has a `user_id`, and `employees` has that user at this location with
+   `role = 'employee'` (managers never get this alert; users who never opened TimeClock
+   are not alerted — they are counted instead, see §5.4);
+2. `occurred_at` is on a working day (`work_days`) and between `work_start` and
+   `work_end`, in the location's timezone (DST-aware via `src/tz.js`); if either time is
+   NULL, no alert;
+3. the employee has no open session and no session covering `occurred_at`;
+4. `occurred_at` is not older than **6 hours** and not more than 5 minutes in the future
+   (a replayed or badly delayed event is stored but opens nothing);
+5. no open not-clocked-in alert exists for that employee — enforced by the existing
+   `ux_alert_nci_open` unique key (`INSERT IGNORE`).
+
+Resolved by `system` with `clocked_in` when the employee starts a session, or by the
+manager with `dismissed`. The employee cannot resolve it.
+
+**Idle (information only)** — for each open session, last activity = the latest of
+`session.started_at`, `activity_monitoring_since`, and the employee's last counted
+event in the session. Idle seconds = `now − last activity`, **minus** break time
+(employee breaks and fixed windows) inside that stretch. Shown when it exceeds
+`idle_minutes` (default 30, 10–240). No alert row is written.
+
+**Outage guard:** idle is shown only when the location's latest `activity_events` row is
+less than 24 hours old. (`ghl_installs.last_event_at` is not used for this: other apps'
+signed events also refresh it.)
 
 ### 5.4 Manager actions — `/admin/alerts`
-- `GET /admin/alerts?status=open` — list with employee name, kind, from/to, employee note.
-- `POST /admin/alerts/:id/dismiss`.
-- `POST /admin/alerts/:id/end-at-last-activity` — only for an `idle` alert whose
-  `to_at` is NULL (the employee did not resume). Ends the session at `from_at` through the
-  same path as a manager edit, writes `edits_log` with an Arabic auto-reason, resolves the
-  alert. Any other case → `409 ALERT_NOT_ENDABLE`.
+- `GET /admin/alerts?status=open` — list with employee name, kind, `from_at`, employee note.
+- `POST /admin/alerts/:id/dismiss` — open alert of this location → `dismissed`;
+  otherwise `404 ALERT_NOT_FOUND`.
+- `GET /admin/live` gains, per open session, `last_activity_at` and `idle_sec` (NULL when
+  monitoring is off or the outage guard applies), and per offline employee
+  `active_without_session` (true while a not-clocked-in alert is open).
+- `GET /admin/sessions` and the CSV gain `activity_count` and `longest_idle_sec`.
+- `GET /admin/ghl-connection` gains `unknown_active_users` = number of distinct
+  `user_id`s with counted events in the last 7 days that have no `employees` row at this
+  location.
+- `PUT /admin/settings` accepts `work_end` (`HH:MM` or null, later than `work_start` →
+  else `400 INVALID_WORK_END`) and `work_days` (integer 1–127 → else
+  `400 INVALID_WORK_DAYS`). **A field absent from the body keeps its stored value** for
+  every setting, so an older page cannot reset newer fields.
 All under `authed, managerOnly`; alert must belong to the manager's location.
+(`end-at-last-activity` is deferred with the idle alert, §11.)
 
 ### 5.5 Employee — `/me/alerts`
 - `GET /me/alerts` — own open alerts.
 - `POST /me/alerts/:id/note` — body `{ note }` (≤ 300 chars); only on own alert.
 
+- `GET /me/status` gains `activity_monitoring` (for the "مراقبة النشاط مفعّلة" line).
+
 ### 5.6 Session summary
 Computed and stored when a session closes by any path (employee stop, auto-close,
-manager edit, end-at-last-activity), only if monitoring was on for any part of it:
+manager edit), and recomputed when a manager edits a closed session, only if monitoring
+was on for any part of it. Only counted events (with `user_id`) are used:
 `activity_count`, `last_activity_at`, and `longest_idle_sec` = the longest gap between
 consecutive points {start, events…, end}, **with break time (employee and fixed)
 removed from each gap**.
@@ -217,24 +260,26 @@ Every 15 minutes (timer) and lazily: `DELETE FROM activity_events WHERE occurred
 - Settings: toggle "مراقبة النشاط", "حد الخمول (دقائق)" 10–240, connection status
   ("✓ مربوط — آخر حدث وصل: 11:42" / "✗ غير مربوط — أعد تثبيت التطبيق من الـ Marketplace"),
   and the note "لازم يكون الموظفين عارفين إنه نشاطهم مراقب".
+  Phase B adds: "نهاية الدوام" next to "بداية الدوام"; "أيام الدوام" as seven
+  checkboxes (السبت … الجمعة); while monitoring is on and a time is missing, the hint
+  "حدّد بداية ونهاية الدوام لتشتغل تنبيهات العمل بدون دوام"; and, when
+  `unknown_active_users > 0`, "في نشاط بآخر 7 أيام من X مستخدمين ما فتحوا TimeClock بعد".
 - Dashboard: "تنبيهات النشاط" panel at the top, only when alerts are open, with count;
-  each row: name, "بدون نشاط من 11:20 · 45 د" or "عم يشتغل بدون دوام من 09:05",
-  employee note if any, buttons "تجاهل" and "إنهاء الجلسة عند آخر نشاط" (only when allowed).
+  each row: name, "عم يشتغل بدون دوام من 09:05", employee note if any, button "تجاهل".
 - Live floor: idle employees stay in "داخل الدوام" with a warning chip "بدون نشاط 35 د";
   working-without-session employees show "نشِط بدون دوام" in "غير متصل".
-- Session detail: columns "النشاط" (count or "—") and "أطول خمول"; a tag
-  "للمراجعة" / "انتهت عند آخر نشاط" when the session had an alert.
+- Session detail: columns "النشاط" (count or "—") and "أطول خمول" ("—" when not monitored).
 
 **Employee**
-- On opening the page: idle alert → "جلستك فيها فترة بدون نشاط من 11:20 لـ 12:05، والمدير
-  رح يراجعها" with "كنت عم اشتغل" (short reason box, sent with the alert).
-  Not-clocked-in → "مبيّن إنك عم تشتغل من 09:05. بتبلّش الدوام؟" with the normal start
-  button; the session starts **now**, never back-dated by the employee.
+- Not-clocked-in alert open → "مبيّن إنك عم تشتغل من 09:05. بتبلّش الدوام؟" with the normal
+  start button (the session starts **now**, never back-dated) and a short note box sent to
+  the manager with the alert.
 - A permanent small line "مراقبة النشاط مفعّلة" while monitoring is on.
 
 ## 7. Errors (new codes, documented in PROJECT.md §8)
 
-`WEBHOOK_BAD_SIGNATURE` (401), `PAYLOAD_TOO_LARGE` (413, webhook body over 256 KB), `ALERT_NOT_FOUND` (404), `ALERT_NOT_ENDABLE` (409),
+`WEBHOOK_BAD_SIGNATURE` (401), `PAYLOAD_TOO_LARGE` (413, webhook body over 256 KB), `ALERT_NOT_FOUND` (404), `ALERT_NOT_ENDABLE` (409, deferred with §11),
+`INVALID_WORK_END` (400), `INVALID_WORK_DAYS` (400),
 `NOTE_TOO_LONG` reused for employee notes over 300, `INVALID_IDLE_MINUTES` (400),
 `INVALID_ACTIVITY_MONITORING` (400),
 `OAUTH_EXCHANGE_FAILED` (GHL refused the code, 502) and `OAUTH_UNREACHABLE` (GHL not reached
@@ -247,13 +292,21 @@ within 10 s, 504) — both shown as pages, not JSON.
 - Smoke (local): fake webhooks signed with a **test key pair**. The test public key is
   accepted **only when `NODE_ENV` is `development` or `test`** (fails closed, stricter than
   dev-login). Against production the smoke test records one "refused" check and skips the
-  test-signed checks. Checks: bad
-  signature rejected; duplicate `webhook_id` stored once; activity recorded only for
-  monitored locations and known employees; idle alert raised (backdated sessions);
-  no idle during a break; late event resolves; not-clocked-in alert and auto-resolve on
-  start; dismiss; end-at-last-activity writes `edits_log`; employee note; summary on stop;
-  retention delete.
+  test-signed checks. Phase A checks (done): bad signature rejected; duplicate
+  `webhook_id` stored once; activity recorded only for monitored locations; retention
+  delete. The draft's idle-alert, late-event and end-at-last-activity checks are replaced
+  by the phase B list below (§11).
 - Frontend: settings controls and status, alerts panel and actions, employee banners.
+- **Phase B (2026-10-02 scope):**
+  - Unit (`src/activity.js`): inside/outside working hours in a non-UTC zone across a DST
+    change; day off; NULL `work_start`/`work_end`; idle seconds with employee breaks,
+    fixed windows and `activity_monitoring_since`; session summary; replay window.
+  - Smoke: not-clocked-in alert opens inside hours; not outside hours, on a day off, for a
+    manager, for an employee with an open or covering session, for an event without
+    `user_id`, or for an event older than 6 hours; only one open alert per employee;
+    auto-resolved on start; dismiss; employee note and its 300-char limit; another
+    location's alert is 404; `work_end`/`work_days` validation; absent settings fields
+    keep their value; live `idle_sec`; summary stored on stop; `unknown_active_users`.
 
 ## 9. Delivery — two phases, each with its own plan
 
@@ -263,8 +316,17 @@ connection status, `last_event_at`, retention. Then **verify on Innova**: events
 with `userId`; identify the field that marks automated messages; confirm mobile-app
 messages. The findings update §2 before phase B.
 
-**Phase B — detection, alerts and UI.** Detector, alerts API, manager panel, live-floor
-chips, session summary columns, employee banners and notes.
+**Phase B — detection, alerts and UI.** Migration 005 (`work_end`, `work_days`),
+`src/activity.js`, not-clocked-in alert on event arrival, alerts API, manager panel,
+live-floor chips, session summary columns, employee banner and note, settings fields,
+unknown-users count. Rollout: migration 005 in phpMyAdmin → push → Innova's manager sets
+"نهاية الدوام" and "أيام الدوام".
+
+Phase-A review items carried into phase B: trim `GHL_APP_ID` and log a mismatch once;
+"absent = keep" for every `PUT /admin/settings` field; the outage guard reads
+`activity_events`, not `last_event_at`; a replay/delay window for alerts (§5.3). Still
+parked (no phase-B code decrypts tokens or writes idle alerts): GCM hardening before any
+`decryptToken` use, and always setting `session_id` on idle alerts.
 
 Rollout for each phase: migration first → deploy (monitoring off by default, no change
 for anyone) → Marketplace settings + env vars → reinstall and enable on **Innova only**,
@@ -278,3 +340,16 @@ observe a few days with the manager, then offer to other clients.
 - Fairness: activity never changes hours by itself; every alert is answerable by the
   employee; outages and late events cannot create idle alerts.
 - Privacy: no content stored; raw events kept 90 days; summaries and alerts kept.
+
+## 11. Deferred (decided 2026-10-02)
+
+Not in phase B; the tables and columns already exist from migration 004, so bringing
+them back needs no migration:
+- the `idle` alert (open/resume/late-activity rules from the 2026-09-29 draft of §5.3);
+- `POST /admin/alerts/:id/end-at-last-activity` and `409 ALERT_NOT_ENDABLE`;
+- the employee idle banner ("جلستك فيها فترة بدون نشاط…").
+
+Revisit when more channels (SMS, WhatsApp, calls) are connected on a client account and
+the idle chip has been observed against real days. Reason for deferring: on Innova a
+quiet stretch is weak evidence, and an alert with an "end session" button is the closest
+thing in this product to a pay deduction.
