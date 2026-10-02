@@ -21,10 +21,50 @@ function makeApi(status, settings = DEFAULT_SETTINGS, settingsError = null, post
   return { get, post };
 }
 
+// Answers /me/alerts with `alerts` (an Error rejects) and everything else like `api`.
+function withAlerts(api, alerts) {
+  const base = api.get;
+  api.get = vi.fn((path) => (path && path.startsWith("/me/alerts")
+    ? (alerts instanceof Error ? Promise.reject(alerts) : Promise.resolve(alerts))
+    : base(path)));
+  return api;
+}
+
 const nowSec = () => Math.floor(Date.now() / 1000);
 
 describe("EmployeeScreen", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("asks an employee working without a session to start the day", async () => {
+    const at = Date.UTC(2026, 9, 5, 5, 5) / 1000; // 09:05 Dubai
+    const api = withAlerts(makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() }),
+      { alerts: [{ id: "a1", kind: "working_not_clocked_in", from_at: at }], timezone: "Asia/Dubai" });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    expect(await screen.findByText("مبيّن إنك عم تشتغل من 09:05. بتبلّش الدوام؟")).toBeInTheDocument();
+  });
+
+  it("sends the employee's note on the alert", async () => {
+    const at = Date.UTC(2026, 9, 5, 5, 5) / 1000;
+    const api = withAlerts(makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() }),
+      { alerts: [{ id: "a1", kind: "working_not_clocked_in", from_at: at }], timezone: "UTC" });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    fireEvent.change(await screen.findByLabelText("ملاحظة للمدير"), { target: { value: "كنت عم رد من الموبايل" } });
+    fireEvent.click(screen.getByRole("button", { name: "إرسال الملاحظة" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/me/alerts/a1/note", { note: "كنت عم رد من الموبايل" }));
+  });
+
+  it("says so while activity monitoring is on", async () => {
+    const api = makeApi({ open_session: null, worked_sec: 0, server_time: nowSec(), activity_monitoring: true });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    expect(await screen.findByText("مراقبة النشاط مفعّلة")).toBeInTheDocument();
+  });
+
+  it("still works when the alerts request fails", async () => {
+    const api = withAlerts(makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() }), new Error("down"));
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    expect(await screen.findByRole("button", { name: /بدء الدوام/ })).toBeInTheDocument();
+    expect(screen.queryByText("حدث خطأ، حاول مرة أخرى")).not.toBeInTheDocument();
+  });
 
   it("shows start button when no open session", async () => {
     const api = makeApi({ open_session: null, worked_sec: 0, server_time: 1000 });

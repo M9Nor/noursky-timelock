@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Button from "./Button.jsx";
 import Icon from "./Icon.jsx";
 import { useToast } from "./ToastContext.jsx";
-import { formatClock, formatHours, serverOffset, nowWithOffset, liveTotals } from "../time.js";
+import { formatClock, formatHours, formatTime, serverOffset, nowWithOffset, liveTotals } from "../time.js";
 import MyHistory from "./MyHistory.jsx";
 import StopNoteDialog from "./StopNoteDialog.jsx";
 
@@ -24,6 +24,8 @@ export default function EmployeeScreen({ api, user }) {
   const [targetSec, setTargetSec] = useState(8 * 3600);
   const [policy, setPolicy] = useState({ break_mode: "off", break_start: null, break_end: null, break_paid: false, note_on_stop: "off" });
   const [askNote, setAskNote] = useState(false);
+  const [alerts, setAlerts] = useState({ list: [], timezone: null });
+  const [alertNote, setAlertNote] = useState("");
   const offsetRef = useRef(0);
   const toast = useToast();
 
@@ -34,6 +36,13 @@ export default function EmployeeScreen({ api, user }) {
     const weekFrom = s.server_time - 7 * 86400;
     const wk = await api.get(`/me/status?since=${weekFrom}`);
     setWeekSec(wk.worked_sec);
+    // Alerts are a convenience: a failure here never blocks clocking in.
+    try {
+      const a = await api.get("/me/alerts");
+      setAlerts({ list: a.alerts ?? [], timezone: a.timezone ?? null });
+    } catch {
+      setAlerts({ list: [], timezone: null });
+    }
   }
 
   useEffect(() => { refresh().catch(() => setError(GENERIC_ERROR)); }, []);
@@ -123,6 +132,18 @@ export default function EmployeeScreen({ api, user }) {
     if (ok) setAskNote(false);
   }
 
+  async function sendAlertNote(id) {
+    const note = alertNote.trim();
+    if (!note) return;
+    try {
+      await api.post(`/me/alerts/${id}/note`, { note });
+      setAlertNote("");
+      toast("وصلت ملاحظتك للمدير");
+    } catch (e) {
+      setError(e.code === "NOTE_TOO_LONG" ? "الملاحظة طويلة جداً" : GENERIC_ERROR);
+    }
+  }
+
   function toggleBreak() {
     return status?.open_break
       ? run(() => api.post("/session/break/stop"), "انتهت الاستراحة")
@@ -142,6 +163,7 @@ export default function EmployeeScreen({ api, user }) {
     : open ? ["work", "داخل الدوام"] : ["off", "لم يسجّل الدخول"];
   // An employee already on a break can always end it, even if the mode changed since.
   const showBreak = open && (policy.break_mode === "flexible" || onBreak);
+  const nci = !open ? alerts.list.find((a) => a.kind === "working_not_clocked_in") : null;
 
   return (
     <div className="grid emp">
@@ -163,6 +185,7 @@ export default function EmployeeScreen({ api, user }) {
           {policy.break_mode === "fixed" && policy.break_start && policy.break_end && (
             <p className="hint">الاستراحة <span className="ltr">{policy.break_start}–{policy.break_end}</span> · {policy.break_paid ? "مدفوعة" : "غير مدفوعة"}</p>
           )}
+          {status?.activity_monitoring && <p className="hint">مراقبة النشاط مفعّلة</p>}
         </div>
         <div className="actions">
           <Button onClick={toggle} loading={loading} variant={open ? "danger" : "primary"} size="lg">
@@ -175,6 +198,20 @@ export default function EmployeeScreen({ api, user }) {
           )}
         </div>
       </div>
+
+      {nci && (
+        <section className="panel notice" role="status">
+          <p>مبيّن إنك عم تشتغل من {formatTime(nci.from_at, alerts.timezone)}. بتبلّش الدوام؟</p>
+          <div className="actions">
+            <Button onClick={toggle} loading={loading} size="lg"><Icon name="play" />بدء الدوام</Button>
+          </div>
+          <div className="field">
+            <label htmlFor="alert-note">ملاحظة للمدير</label>
+            <textarea id="alert-note" maxLength={300} value={alertNote} onChange={(e) => setAlertNote(e.target.value)} />
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => sendAlertNote(nci.id)}>إرسال الملاحظة</Button>
+        </section>
+      )}
 
       <section className="panel">
         <div className="panel-h"><h2>ساعاتي هذا الأسبوع</h2></div>
