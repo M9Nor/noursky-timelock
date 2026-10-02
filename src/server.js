@@ -12,7 +12,7 @@ import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID }
 import { localZone, localDate, wallToUtc, fixedWindows, localDayBounds } from "./tz.js";
 import { bodyLimit } from "hono/body-limit";
 import { verifyGhlSignature, parseWebhook, testKeyAllowed, isForOurApp, activityDedupeKey } from "./ghlWebhook.js";
-import { isWithinWorkHours, isFreshEvent } from "./activity.js";
+import { isWithinWorkHours, isFreshEvent, idleSeconds, sessionSummary } from "./activity.js";
 import { exchangeCode } from "./ghlOAuth.js";
 import { encryptToken } from "./tokenCrypto.js";
 
@@ -284,6 +284,99 @@ async function autoCloseStale(loc = null) {
         AND (:loc IS NULL OR b.location_id = :loc)`,
     { loc }
   );
+  await summarizeClosedSessions(loc);
+}
+
+/** Break intervals of one session as [start, end|null], plus its fixed windows (paid ones too). */
+async function sessionBreaks(session, st, until) {
+  const rows = await q("SELECT started_at, ended_at FROM breaks WHERE session_id = :sid", { sid: session.id });
+  const out = rows.map((b) => [Number(b.started_at), b.ended_at == null ? null : Number(b.ended_at)]);
+  if (st?.break_mode === "fixed" && st.break_start && st.break_end) {
+    out.push(...fixedWindows(st.timezone, Number(session.started_at), until, st.break_start, st.break_end));
+  }
+  return out;
+}
+
+/** This employee's counted events (with a user id) inside [from, to]. */
+async function eventTimes(loc, uid, from, to) {
+  const rows = await q(
+    `SELECT occurred_at FROM activity_events
+      WHERE location_id = :loc AND user_id = :uid AND occurred_at >= :from AND occurred_at <= :to`,
+    { loc, uid, from, to }
+  );
+  return rows.map((r) => Number(r.occurred_at));
+}
+
+/**
+ * Stores the activity summary (spec §5.6) of recently closed sessions that have none, for
+ * locations with monitoring on. Every close path ends up here — /session/stop, auto-close,
+ * and a manager edit (which clears the summary first) — so the rule lives in one place.
+ * A session that closed while monitoring was off keeps NULL, shown as "—".
+ */
+async function summarizeClosedSessions(loc = null) {
+  const locs = loc
+    ? [loc]
+    : (await q("SELECT location_id FROM settings WHERE activity_monitoring = 1")).map((r) => r.location_id);
+  const t = now();
+  for (const l of locs) {
+    const st = await getSettings(l);
+    if (!st?.activity_monitoring || st.activity_monitoring_since == null) continue;
+    const since = Number(st.activity_monitoring_since);
+    const rows = await q(
+      `SELECT id, user_id, started_at, ended_at FROM sessions
+        WHERE location_id = :loc AND ended_at IS NOT NULL AND activity_count IS NULL
+          AND ended_at > :since AND ended_at > :recent
+        LIMIT 50`,
+      { loc: l, since, recent: t - 7 * 86400 }
+    );
+    for (const s of rows) {
+      const start = Number(s.started_at), end = Number(s.ended_at);
+      const sum = sessionSummary({
+        startedAt: start, endedAt: end, monitoringSince: since,
+        eventTimes: await eventTimes(l, s.user_id, start, end),
+        breaks: await sessionBreaks(s, st, end),
+      });
+      if (!sum) continue;
+      await q(
+        `UPDATE sessions SET activity_count = :n, last_activity_at = :last, longest_idle_sec = :idle
+          WHERE id = :id AND activity_count IS NULL`,
+        { n: sum.activity_count, last: sum.last_activity_at, idle: sum.longest_idle_sec, id: s.id }
+      );
+    }
+  }
+}
+
+/**
+ * Per-employee activity for the live floor (spec §5.3): idle seconds of open sessions, and
+ * who is working without a session. Idle is null when monitoring is off or when the
+ * location's newest event is over 24 h old (outage guard — other apps' events also refresh
+ * ghl_installs.last_event_at, so that column is not used here).
+ */
+async function liveActivity(loc, st, employees, t) {
+  const blank = () => ({ last_activity_at: null, idle_sec: null, active_without_session: false });
+  const out = new Map(employees.map((e) => [e.user_id, blank()]));
+  if (!st?.activity_monitoring) return out;
+  const nci = await q(
+    `SELECT user_id FROM activity_alerts
+      WHERE location_id = :loc AND kind = 'working_not_clocked_in' AND status = 'open'`,
+    { loc }
+  );
+  for (const r of nci) if (out.has(r.user_id)) out.get(r.user_id).active_without_session = true;
+  const [fresh] = await q("SELECT MAX(occurred_at) AS at FROM activity_events WHERE location_id = :loc", { loc });
+  if (fresh?.at == null || Number(fresh.at) <= t - 86400) return out;
+  for (const e of employees) {
+    if (!e.session_id) continue;
+    const start = Number(e.started_at);
+    const times = await eventTimes(loc, e.user_id, start, t);
+    const lastEventAt = times.length ? Math.max(...times) : null;
+    const row = out.get(e.user_id);
+    row.last_activity_at = lastEventAt;
+    row.idle_sec = idleSeconds({
+      startedAt: start, monitoringSince: st.activity_monitoring_since, lastEventAt, now: t,
+      breaks: await sessionBreaks({ id: e.session_id, started_at: start }, st, t),
+    });
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -408,6 +501,7 @@ app.get("/me/status", authed, async (c) => {
     fixed_break: fixedBreak,
     // Lets the screen refresh at local midnight, when "today" starts over.
     day_ends_at: dayEnd,
+    activity_monitoring: Boolean(st?.activity_monitoring),
     server_time: t,
   });
 });
@@ -611,6 +705,7 @@ app.post("/session/stop", authed, async (c) => {
       { id: s.id, t, st: s.started_at }
     );
     await conn.commit();
+    await summarizeClosedSessions(loc);
     return c.json({
       id: s.id, started_at: s.started_at, ended_at: t,
       duration_sec: t - s.started_at, break_sec: Number(brk.break_sec), note,
@@ -638,7 +733,14 @@ app.get("/admin/live", authed, managerOnly, async (c) => {
     { loc }
   );
   const t = now();
-  return c.json({ server_time: t, fixed_break: todayFixedBreak(await getSettings(loc), t), employees });
+  const st = await getSettings(loc);
+  const activity = await liveActivity(loc, st, employees, t);
+  return c.json({
+    server_time: t,
+    fixed_break: todayFixedBreak(st, t),
+    idle_minutes: st?.activity_monitoring ? Number(st.idle_minutes) : null,
+    employees: employees.map((e) => ({ ...e, ...activity.get(e.user_id) })),
+  });
 });
 
 // Every local day overlapping [from, to) starts at most ~14h before `from` and ends at
@@ -747,6 +849,7 @@ app.get("/admin/sessions", authed, managerOnly, async (c) => {
   await autoCloseStale(loc);
   const sessions = (await q(
     `SELECT s.id, s.user_id, e.name, s.started_at, s.ended_at, s.duration_sec, s.closed_by, s.note,
+            s.activity_count, s.longest_idle_sec,
             ${BREAK_SEC_EXPR} AS break_sec
        FROM sessions s
        JOIN employees e ON e.user_id = s.user_id AND e.location_id = s.location_id
@@ -755,7 +858,12 @@ app.get("/admin/sessions", authed, managerOnly, async (c) => {
       ORDER BY s.started_at DESC
       LIMIT 1000`,
     { loc, from, to, uid, now: now() }
-  )).map((r) => ({ ...r, break_sec: Number(r.break_sec) }));
+  )).map((r) => ({
+    ...r,
+    break_sec: Number(r.break_sec),
+    activity_count: numOrNull(r.activity_count),
+    longest_idle_sec: numOrNull(r.longest_idle_sec),
+  }));
 
   // Annotate each session with how late it was, so the manager can audit the
   // late_days count in /admin/report instead of just seeing a total.
@@ -822,7 +930,8 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
     if (!rows.length) throw new HttpError(404, "SESSION_NOT_FOUND");
     const old = rows[0];
     await conn.execute(
-      `UPDATE sessions SET started_at = :s, ended_at = :e, duration_sec = :dur, closed_by = 'admin'
+      `UPDATE sessions SET started_at = :s, ended_at = :e, duration_sec = :dur, closed_by = 'admin',
+                           activity_count = NULL, last_activity_at = NULL, longest_idle_sec = NULL
         WHERE id = :id AND location_id = :loc`,
       { s, e, dur: e - s, id, loc }
     );
@@ -842,6 +951,7 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
       }
     );
     await conn.commit();
+    await summarizeClosedSessions(loc);
     return c.json({ id, started_at: s, ended_at: e, duration_sec: e - s, closed_by: "admin" });
   } catch (err) {
     await conn.rollback().catch(() => {});
@@ -859,6 +969,7 @@ app.get("/admin/export.csv", authed, managerOnly, async (c) => {
   const tz = (await getSettings(loc))?.timezone ?? "Asia/Riyadh";
   const rows = await q(
     `SELECT e.name, e.email, s.started_at, s.ended_at, s.duration_sec, s.closed_by, s.note,
+            s.activity_count, s.longest_idle_sec,
             ${BREAK_SEC_EXPR} AS break_sec
        FROM sessions s
        JOIN employees e ON e.user_id = s.user_id AND e.location_id = s.location_id
@@ -885,10 +996,11 @@ app.get("/admin/export.csv", authed, managerOnly, async (c) => {
     return s > 0 ? Math.max(1, Math.round(s / 60)) : 0;
   };
   const lines = [
-    ["Employee", "Email", "Start", "End", "Hours", "Break (min)", "Closed by", "Note"],
+    ["Employee", "Email", "Start", "End", "Hours", "Break (min)", "Closed by", "Note", "Activity", "Longest idle (min)"],
     ...rows.map((r) => [r.name, r.email, fmt(r.started_at), fmt(r.ended_at),
       r.duration_sec ? (Math.max(0, Number(r.duration_sec) - Number(r.break_sec)) / 3600).toFixed(2) : "",
-      breakMin(r.break_sec), r.closed_by ?? "open", r.note ?? ""]),
+      breakMin(r.break_sec), r.closed_by ?? "open", r.note ?? "",
+      r.activity_count ?? "", r.longest_idle_sec == null ? "" : Math.round(Number(r.longest_idle_sec) / 60)]),
   ];
   const csv = "\uFEFF" + lines.map((l) => l.map(esc).join(",")).join("\r\n"); // BOM → Excel reads Arabic
   return c.body(csv, 200, {
@@ -915,12 +1027,21 @@ app.get("/admin/ghl-connection", authed, managerOnly, async (c) => {
     "SELECT COUNT(*) AS n FROM activity_events WHERE location_id = :loc AND occurred_at >= :since",
     { loc, since: now() - 86400 }
   );
+  // Counted events (with a user id) from people who never opened TimeClock here (spec §5.4).
+  const [unknown] = await q(
+    `SELECT COUNT(DISTINCT a.user_id) AS n
+       FROM activity_events a
+       LEFT JOIN employees e ON e.user_id = a.user_id AND e.location_id = a.location_id
+      WHERE a.location_id = :loc AND a.user_id IS NOT NULL AND a.occurred_at >= :since AND e.user_id IS NULL`,
+    { loc, since: now() - 7 * 86400 }
+  );
   const scopes = String(row?.scopes ?? "").split(/[\s,]+/).filter(Boolean);
   return c.json({
     installed: Boolean(row?.installed_at && !row?.uninstalled_at),
     has_activity_scope: scopes.includes(ACTIVITY_SCOPE),
     last_event_at: row?.last_event_at == null ? null : Number(row.last_event_at),
     events_24h: Number(cnt.n),
+    unknown_active_users: Number(unknown.n),
   });
 });
 

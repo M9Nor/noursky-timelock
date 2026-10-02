@@ -975,6 +975,71 @@ if (!awAcceptsTestKey) {
 }
 await cleanupLocation(NCLOC);
 
+// --- Idle information and session summary (activity phase B, spec §5.3 / §5.6). Local DB only:
+// --- sessions and the monitoring start are backdated directly.
+const IDLOC = `${LOC}-id`;
+const idMgr = await sso({ userId: `${IDLOC}-m1`, role: "admin", type: "account", activeLocation: IDLOC, userName: "مدير الخمول", email: "idm@x.com" });
+const idEmp = await sso({ userId: `${IDLOC}-u1`, role: "user", type: "account", activeLocation: IDLOC, userName: "موظف الخمول", email: "ide@x.com" });
+const IDM = idMgr.body?.token, IDE = idEmp.body?.token;
+let idSeq = 0;
+const idEvent = (userId) => {
+  idSeq++;
+  return ghlWebhook({ type: "OutboundMessage", locationId: IDLOC, userId, messageType: "SMS", source: "app",
+    dateAdded: new Date().toISOString(), webhookId: `${IDLOC}-w${idSeq}`, messageId: `${IDLOC}-m${idSeq}` });
+};
+const idLive = async () => (await call(IDM, "GET", "/admin/live")).body;
+const idMe = async () => (await idLive())?.employees?.find((e) => e.user_id === `${IDLOC}-u1`);
+
+await call(IDM, "PUT", "/admin/settings", { timezone: "UTC", activity_monitoring: true, idle_minutes: 10 });
+check("the employee status says whether monitoring is on",
+  (await call(IDE, "GET", "/me/status")).body?.activity_monitoring === true);
+check("live reports the idle threshold", (await idLive())?.idle_minutes === 10);
+
+const idT = Math.floor(Date.now() / 1000);
+const idBack = await withLocalDb((conn) =>
+  conn.execute("UPDATE settings SET activity_monitoring_since = ? WHERE location_id = ?", [idT - 7200, IDLOC]));
+if (!awAcceptsTestKey || idBack.skipped) {
+  console.log(`  SKIP  idle and summary checks (${idBack.skipped ?? "target refuses the test signing key"})`);
+} else {
+  await call(IDE, "POST", "/session/start");
+  await localRows("UPDATE sessions SET started_at = :s WHERE location_id = :loc AND ended_at IS NULL", { s: idT - 3600, loc: IDLOC });
+  check("no idle time is shown before any event has arrived (outage guard)", (await idMe())?.idle_sec === null);
+
+  await idEvent(`${IDLOC}-stranger`); // someone who never opened TimeClock: proves events arrive
+  const idIdle = await idMe();
+  check("an open session with no activity for an hour shows about an hour idle",
+    Math.abs(Number(idIdle?.idle_sec) - 3600) <= 10 && idIdle?.last_activity_at === null, `(${JSON.stringify(idIdle)})`);
+  check("unknown active users are counted for the connection status",
+    (await call(IDM, "GET", "/admin/ghl-connection")).body?.unknown_active_users === 1);
+
+  await idEvent(`${IDLOC}-u1`);
+  const idActive = await idMe();
+  check("an event resets the idle time",
+    Number(idActive?.idle_sec) <= 10 && Math.abs(Number(idActive?.last_activity_at) - idT) <= 10, `(${JSON.stringify(idActive)})`);
+
+  await call(IDE, "POST", "/session/stop");
+  const idS = (await call(IDM, "GET", `/admin/sessions?from=${idT - 86400}&to=${idT + 60}&user_id=${IDLOC}-u1`)).body?.sessions?.[0];
+  check("stopping stores the session's activity summary",
+    idS?.activity_count === 1 && Math.abs(Number(idS?.longest_idle_sec) - 3600) <= 10, `(${JSON.stringify(idS)})`);
+  const idCsv = await call(IDM, "GET", `/admin/export.csv?from=${idT - 86400}&to=${idT + 60}`);
+  check("the CSV has the activity columns", String(idCsv.body).includes("Longest idle (min)"));
+
+  const idEdit = await call(IDM, "PATCH", `/admin/sessions/${idS?.id}`,
+    { started_at: idT - 600, ended_at: idT + 0, reason: "تقصير للاختبار" });
+  const idS2 = (await call(IDM, "GET", `/admin/sessions?from=${idT - 86400}&to=${idT + 60}&user_id=${IDLOC}-u1`)).body?.sessions?.[0];
+  check("a manager edit recomputes the summary",
+    idEdit.status === 200 && Number(idS2?.longest_idle_sec) <= 600, `(${JSON.stringify(idS2)})`);
+
+  await localRows("DELETE FROM activity_events WHERE location_id = :loc", { loc: IDLOC });
+  await call(IDE, "POST", "/session/start");
+  check("with no event in 24 hours idle is not shown", (await idMe())?.idle_sec === null);
+  await call(IDE, "POST", "/session/stop");
+
+  await call(IDM, "PUT", "/admin/settings", { activity_monitoring: false });
+  check("with monitoring off live has no idle threshold", (await idLive())?.idle_minutes === null);
+}
+await cleanupLocation(IDLOC);
+
 const awBig = await ghlWebhook({ type: "OutboundMessage", locationId: AWLOC, pad: "x".repeat(300 * 1024) }, { sign: false });
 check("a webhook over 256 KB → 413 PAYLOAD_TOO_LARGE",
   awBig.status === 413 && awBig.body?.error === "PAYLOAD_TOO_LARGE", `(${awBig.status} ${JSON.stringify(awBig.body)})`);
