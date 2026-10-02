@@ -10,6 +10,9 @@
 > and session columns), never as an alert. The idle alert, "end at last activity" and the
 > employee idle banner are deferred (§11). New settings `work_end` and `work_days` define
 > working hours (migration 005).
+>
+> **Phase C (owner, 2026-10-02 evening):** the idle alert comes back — see §12. It replaces
+> the "information only" idle rule of §5.3; "end at last activity" stays deferred.
 
 ## 1. Goal
 
@@ -17,7 +20,7 @@ Help managers catch the two failures manual clock-in cannot see on its own:
 
 1. an employee is **working in GHL but never clocked in** (forgot to start) — an alert;
 2. an employee **clocked in but shows no activity** for a long stretch (idle, or forgot to
-   stop) — shown to the manager as information in phase B; an alert later (§11).
+   stop) — an alert to the manager and the employee since phase C (§12).
 
 Manual start/stop stays the record of truth for hours and pay. Activity only raises
 alerts, marks sessions for review, and gives the manager one-click corrections that
@@ -136,7 +139,7 @@ after the previous is resolved, e.g. the employee stops and later works again un
 
 `settings`:
 - `activity_monitoring` TINYINT(1) NOT NULL DEFAULT 0 — off by default everywhere.
-- `idle_minutes` INT NOT NULL DEFAULT 30 — allowed 10–240.
+- `idle_minutes` INT NOT NULL DEFAULT 30 — allowed 1–240 (10–240 until phase C).
 - `activity_monitoring_since` BIGINT NULL — set when monitoring is switched on; idle is
   never measured from before it.
 
@@ -213,7 +216,8 @@ manager with `dismissed`. The employee cannot resolve it.
 `session.started_at`, `activity_monitoring_since`, and the employee's last counted
 event in the session. Idle seconds = `now − last activity`, **minus** break time
 (employee breaks and fixed windows) inside that stretch. Shown when it exceeds
-`idle_minutes` (default 30, 10–240). No alert row is written.
+`idle_minutes` (default 30, 1–240). Phase B wrote no alert row; phase C opens an `idle`
+alert (§12).
 
 **Outage guard:** idle is shown only when the location's latest `activity_events` row is
 less than 24 hours old. (`ghl_installs.last_event_at` is not used for this: other apps'
@@ -236,7 +240,7 @@ signed events also refresh it.)
   `400 INVALID_WORK_DAYS`). **A field absent from the body keeps its stored value** for
   every setting, so an older page cannot reset newer fields.
 All under `authed, managerOnly`; alert must belong to the manager's location.
-(`end-at-last-activity` is deferred with the idle alert, §11.)
+(`end-at-last-activity` stays deferred, §11.)
 
 ### 5.5 Employee — `/me/alerts`
 - `GET /me/alerts` — own open alerts.
@@ -260,7 +264,7 @@ Every 15 minutes (timer) and lazily: `DELETE FROM activity_events WHERE occurred
 ## 6. Interface
 
 **Manager**
-- Settings: toggle "مراقبة النشاط", "حد الخمول (دقائق)" 10–240, connection status
+- Settings: toggle "مراقبة النشاط", "حد الخمول (دقائق)" 1–240, connection status
   ("✓ مربوط — آخر حدث وصل: 11:42" / "✗ غير مربوط — أعد تثبيت التطبيق من الـ Marketplace"),
   and the note "لازم يكون الموظفين عارفين إنه نشاطهم مراقب".
   Phase B adds: "نهاية الدوام" next to "بداية الدوام"; "أيام الدوام" as seven
@@ -352,11 +356,74 @@ observe a few days with the manager, then offer to other clients.
 
 Not in phase B; the tables and columns already exist from migration 004, so bringing
 them back needs no migration:
-- the `idle` alert (open/resume/late-activity rules from the 2026-09-29 draft of §5.3);
+- ~~the `idle` alert~~ — brought back in phase C (§12);
 - `POST /admin/alerts/:id/end-at-last-activity` and `409 ALERT_NOT_ENDABLE`;
-- the employee idle banner ("جلستك فيها فترة بدون نشاط…").
+- ~~the employee idle banner~~ — brought back in phase C (§12).
 
 Revisit when more channels (SMS, WhatsApp, calls) are connected on a client account and
 the idle chip has been observed against real days. Reason for deferring: on Innova a
 quiet stretch is weak evidence, and an alert with an "end session" button is the closest
 thing in this product to a pay deduction.
+
+## 12. Phase C — the idle alert (owner, 2026-10-02)
+
+The owner wants an alert to the manager **and** the employee once a clocked-in employee has
+had no activity for longer than `idle_minutes`, set freely by the manager (1–240 minutes).
+Decisions: the alert stays with the manager until dismissed (option B); delivery is inside
+the app with a one-minute refresh (option A, no cost).
+
+### 12.1 Detection
+A detector runs every **60 seconds** and lazily before `GET /admin/live`, `GET /admin/alerts`
+and `GET /me/alerts`. For each open session at a location with `activity_monitoring = 1`:
+- **Outage guard:** skip the location unless it has an `activity_events` row from the last 24 h.
+- **Last activity** = the latest of `session.started_at`, `activity_monitoring_since`, and the
+  employee's last counted event (with `user_id`) since the session started.
+- **Idle seconds** = time from last activity to now **minus breaks** (employee breaks and the
+  fixed window, paid or not) — the same `idleSeconds` rule as the live chip.
+- **Open** an `idle` alert when idle seconds ≥ `idle_minutes × 60` and the employee is not on
+  a break right now and not inside the fixed window: `session_id` = the session (always set),
+  `from_at` = last activity, `to_at` NULL, `status` open. At most one ongoing idle alert per
+  session — the existing `ux_alert_idle_open (session_id, idle_open_flag)` key with
+  `INSERT IGNORE`. Working hours do not apply: an open session is the employee's own claim to
+  be working.
+
+### 12.2 Resume, late event, session end
+- **Resume:** when a counted event for that employee is stored with `occurred_at` ≥ the
+  alert's `from_at`, set the ongoing alert's `to_at` = that `occurred_at`. It stays `open` for
+  the manager; it leaves the employee's list.
+- **Late event:** if that event makes the stretch shorter than the threshold
+  (`activeSeconds(from_at, occurred_at, breaks) < idle_minutes × 60`), the alert is resolved by
+  `system` with `late_activity` — a GHL delay never counts against the employee.
+- **Session end** (stop, auto-close, manager edit) with an ongoing alert: `to_at` = the
+  session's `ended_at` (capped at its own `from_at`); it stays open for the manager.
+- A later quiet stretch in the same session opens a new alert.
+
+### 12.3 API
+- `GET /admin/alerts` and `GET /me/alerts` include `idle` alerts (`session_id`, `from_at`,
+  `to_at`). `GET /me/alerts` returns only alerts the employee can still act on: open
+  not-clocked-in alerts, and **ongoing** idle alerts (`to_at` NULL).
+- `POST /me/alerts/:id/note` works on both kinds (open and, for idle, still ongoing or not).
+- `PUT /admin/settings`: `idle_minutes` 1–240, else `400 INVALID_IDLE_MINUTES`.
+
+### 12.4 Interface
+- Manager "تنبيهات النشاط": an idle row reads "بدون نشاط من 11:20 · 25 د" while ongoing
+  (minutes grow with the server clock) or "بدون نشاط من 11:20 لـ 12:05 (45 د)" once ended;
+  employee note if any; "تجاهل".
+- Employee: while an idle alert is ongoing, "ما في نشاط من 11:20 (25 د)، والمدير رح يشوفها.
+  إذا عم تشتغل اكتبله شو عم تعمل." with the note box; it disappears once activity resumes.
+- The employee screen refreshes `/me/status` and `/me/alerts` every 60 seconds; the manager
+  panel keeps its 60-second refresh. While either screen has an alert to show, the browser tab
+  title starts with "⚠️ ".
+- Settings: "حد الخمول (دقائق)" accepts 1–240. The live-floor chip stays.
+
+### 12.5 Testing
+- Unit: the detector's pure decision (threshold reached / not, on a break, inside the fixed
+  window, monitoring start) and the late-event rule.
+- Smoke: opens after the threshold (backdated session); not during a break; not without events
+  in 24 h; one ongoing per session; an event sets `to_at` and hides it from `/me/alerts`; a late
+  event inside the gap resolves it `late_activity`; stopping sets `to_at`; dismiss and note on an
+  idle alert; `idle_minutes` 1 accepted, 0 rejected.
+- Frontend: idle rows (ongoing / ended), employee idle banner, periodic refresh, ⚠️ title.
+
+No migration: `activity_alerts` already has `session_id`, `to_at`, `idle_open_flag` and the
+`late_activity` resolution (migration 004).
