@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createApi, ApiError } from "./api.js";
 import { ssoLogin, devLogin } from "./auth.js";
+import { I18nProvider, translate } from "./i18n.jsx";
 import EmployeeScreen from "./components/EmployeeScreen.jsx";
 import ManagerDashboard from "./components/ManagerDashboard.jsx";
 import { ToastProvider } from "./components/Toast.jsx";
@@ -40,6 +41,8 @@ export default function App() {
     api.current = { get: wrap(base.get), post: wrap(base.post), put: wrap(base.put), patch: wrap(base.patch), rawUrl: base.rawUrl, download: wrap(base.download) };
   }
 
+  const saveLocale = useCallback((l) => { api.current.put("/me/locale", { locale: l }).catch(() => {}); }, []);
+
   async function doSsoLogin() {
     const { token, user } = await ssoLogin(createApi(() => null));
     tokenRef.current = token;
@@ -59,31 +62,36 @@ export default function App() {
     } catch (e) { setError(e.code || "AUTH_FAILED"); }
   }
 
-  if (error) return <div className="card error" style={{ maxWidth: 420, margin: "40px auto" }}>انتهت الجلسة، أعد فتح الصفحة</div>;
-  if (!ready) return <div className="card muted" style={{ maxWidth: 420, margin: "40px auto" }}>جارٍ التحقق…</div>;
+  // No provider is mounted before sign-in, so translate directly.
+  const tr = (key) => translate(user?.locale ?? "ar", key);
+
+  if (error) return <div className="card error" style={{ maxWidth: 420, margin: "40px auto" }}>{tr("app.sessionExpired")}</div>;
+  if (!ready) return <div className="card muted" style={{ maxWidth: 420, margin: "40px auto" }}>{tr("app.checking")}</div>;
 
   if (!user) {
     if (SHOW_DEV_LOGIN) {
       return (
         <div className="card" style={{ maxWidth: 420, margin: "40px auto", textAlign: "center" }}>
-          <p className="muted">وضع التطوير</p>
+          <p className="muted">{tr("app.devMode")}</p>
           <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-            <button className="btn" onClick={() => doDevLogin("employee")}>دخول كموظف</button>
-            <button className="btn" onClick={() => doDevLogin("manager")}>دخول كمدير</button>
+            <button className="btn" onClick={() => doDevLogin("employee")}>{tr("app.devEmployee")}</button>
+            <button className="btn" onClick={() => doDevLogin("manager")}>{tr("app.devManager")}</button>
           </div>
         </div>
       );
     }
-    return <div className="card muted" style={{ maxWidth: 420, margin: "40px auto" }}>جارٍ التحقق…</div>;
+    return <div className="card muted" style={{ maxWidth: 420, margin: "40px auto" }}>{tr("app.checking")}</div>;
   }
 
   return (
+    <I18nProvider locale={user.locale} onChange={saveLocale}>
     <ToastProvider>
-      <a className="skip" href="#main">الانتقال إلى المحتوى</a>
+      <a className="skip" href="#main">{tr("app.skip")}</a>
       <TopBar role={role} onRole={setRoleOverride} />
       <main id="main">
         {role === "manager" ? <ManagerDashboard api={api.current} /> : <EmployeeScreen api={api.current} user={user} />}
       </main>
     </ToastProvider>
+    </I18nProvider>
   );
 }

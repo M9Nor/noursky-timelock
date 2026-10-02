@@ -139,3 +139,12 @@ describe("formatIdle", () => {
     expect(formatIdle(120 * 60)).toBe("2 س");
   });
 });
+
+describe("English duration units", () => {
+  it("formats idle, lateness and break in English", () => {
+    expect(formatIdle(65 * 60, "en")).toBe("1 h 5 min");
+    expect(formatIdle(25 * 60, "en")).toBe("25 min");
+    expect(formatLateness(5 * 60, "en")).toBe("5 min late");
+    expect(formatBreak(20 * 60, "en")).toBe("20 min");
+  });
+});

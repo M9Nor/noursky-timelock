@@ -1,3 +1,9 @@
+const UNITS = {
+  ar: { min: "د", h: "س", late: (d) => `متأخر ${d}` },
+  en: { min: "min", h: "h", late: (d) => `${d} late` },
+};
+const unitsFor = (locale) => UNITS[locale] ?? UNITS.ar;
+
 export function serverOffset(serverTime) {
   return serverTime - Date.now() / 1000;
 }
@@ -20,16 +26,17 @@ export function formatClock(sec) {
   const pad = (n) => String(n).padStart(2, "0");
   return { h: Math.floor(s / 3600), mm: pad(Math.floor((s % 3600) / 60)), ss: pad(s % 60) };
 }
-export function formatLateness(sec) {
+export function formatLateness(sec, locale = "ar") {
+  const u = unitsFor(locale);
   const s = Number(sec);
   if (!Number.isFinite(s) || s <= 0) return "";
   // Round up: a session one second past the grace window is still a late arrival,
-  // and "متأخر 0 د" would read as if it were on time.
+  // and "late 0 min" would read as if it were on time.
   const m = Math.ceil(s / 60);
-  if (m < 60) return `متأخر ${m} د`;
+  if (m < 60) return u.late(`${m} ${u.min}`);
   const h = Math.floor(m / 60);
   const mm = m % 60;
-  return mm ? `متأخر ${h} س ${mm} د` : `متأخر ${h} س`;
+  return u.late(mm ? `${h} ${u.h} ${mm} ${u.min}` : `${h} ${u.h}`);
 }
 export function formatStamp(ts, timeZone, { year = true } = {}) {
   if (!ts) return "—";
@@ -43,10 +50,10 @@ export function formatStamp(ts, timeZone, { year = true } = {}) {
     return new Intl.DateTimeFormat("en-GB", opts).format(d);
   }
 }
-export function formatBreak(sec) {
+export function formatBreak(sec, locale = "ar") {
   const s = Number(sec);
   if (!Number.isFinite(s) || s <= 0) return "";
-  return `${Math.max(1, Math.round(s / 60))} د`;
+  return `${Math.max(1, Math.round(s / 60))} ${unitsFor(locale).min}`;
 }
 
 const overlap = (a1, a2, b1, b2) => Math.max(0, Math.min(a2, b2) - Math.max(a1, b1));
@@ -83,11 +90,12 @@ export function formatTime(ts, timeZone) {
     return new Intl.DateTimeFormat("en-GB", opts).format(new Date(Number(ts) * 1000));
   }
 }
-export function formatIdle(sec) {
+export function formatIdle(sec, locale = "ar") {
+  const u = unitsFor(locale);
   if (sec == null || !Number.isFinite(Number(sec))) return "—";
   const m = Math.floor(Number(sec) / 60);
-  if (m < 60) return `${m} د`;
+  if (m < 60) return `${m} ${u.min}`;
   const h = Math.floor(m / 60);
   const mm = m % 60;
-  return mm ? `${h} س ${mm} د` : `${h} س`;
+  return mm ? `${h} ${u.h} ${mm} ${u.min}` : `${h} ${u.h}`;
 }
