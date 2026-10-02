@@ -183,3 +183,39 @@ currently trigger a harmless rebuild.
 - **Rejected:** keeping the old key (secret lost); a minor version (GHL disallows it for scope changes).
 - **Note:** in hPanel, "Add environment variable" only stages a change — it is saved by **Apply changes**,
   followed by a redeploy.
+
+## 2026-10-02 — Phase B: one alert, idle as information, absent settings fields are kept
+- **Decision:** phase B raises only "working, not clocked in", and only inside working hours
+  (`work_start`–`work_end` on `work_days`, location time). Idle time is shown (live chip, session
+  columns) but never alerts; the idle alert and "end at last activity" are deferred (spec §11).
+  `PUT /admin/settings` keeps any field absent from the body.
+- **Reason:** on Innova only Instagram and Email reach us, so silence is weak evidence; an alert with
+  an "end session" button is the closest thing to a pay deduction. Out-of-hours work is not the
+  manager's concern (owner). "Absent = keep" stops an older page from resetting newer fields.
+- **Rejected:** the 2026-09-29 idle alert as drafted; deriving the end of day from `daily_target_hours`
+  (approximate); a 3-events-in-30-minutes trigger (owner preferred working hours).
+
+## 2026-10-02 — Phase B review refinements: stale-proof alert, guarded summaries
+- **Decision:** the not-clocked-in alert opens with one `INSERT IGNORE ... SELECT ... WHERE NOT EXISTS`
+  and the rule is "no session open, and none ending after the event" (was: none covering it); a
+  duplicate delivery (nothing stored) skips the alert step. A stored session summary needs at least one
+  event at the location in the 24 h before the session ended, else it stays NULL. A manager edit refills
+  that session's summary directly, at any age, if monitoring was ever on there.
+- **Reason:** a separate read then insert let a clock-in racing the event leave a stale open alert, and a
+  late or repeated delivery of an old event could open one after the shift ended. Without the guard an
+  outage (location not on 2.0.0, GHL down) was stored forever as "0 activity, long idle". The periodic
+  pass only looks 7 days back, so an edit of an older session left "—" for good.
+- **Rejected:** keeping the "covering" rule with a re-check after insert (still racy); a time window on
+  the edit refill (summaries are kept forever); recomputing stored summaries when events arrive late.
+
+## 2026-10-02 — Dismiss does not stick; noted alerts stay visible after clock-in
+- **Decision:** a dismissed alert does not suppress later alerts — the next qualifying event opens a
+  new one (no code change). The manager's alerts panel also lists, read-only under "ملاحظات الموظفين",
+  alerts resolved by clocking in during the last 24 hours that carry an employee note
+  (`GET /admin/alerts?status=resolved`, rows now include `resolved_at`). The list order is
+  `from_at DESC, id DESC`; the session-summary pass takes the most recently ended sessions first.
+- **Reason:** an employee who writes a note and then clocks in resolves the alert, and the manager
+  would otherwise never see the explanation. Ordering the summary pass by `ended_at DESC` keeps new
+  sessions from starving behind older ones the no-events guard keeps refusing.
+- **Rejected:** suppressing alerts for the rest of the day after a dismiss (owner prefers every new
+  stretch of unclocked work to be raised); showing notes in the session detail (the alert has no session).

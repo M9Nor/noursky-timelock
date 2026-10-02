@@ -180,6 +180,12 @@ h3{margin:0; font-size:15px; font-weight:600}
 .person .m{font-size:12px; color:var(--muted)}
 .person .m.late{color:var(--neg); font-weight:600}
 .person .m.break{color:var(--warn); font-weight:600}
+.person .m.warn{color:var(--warn); font-weight:600}
+.alerts .panel-h .count{color:var(--warn)}
+.alert-row{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 0; border-top:1px solid var(--line)}
+.alert-row .m{font-size:13px; color:var(--warn)}
+.alert-row .note{font-size:13px; color:var(--muted); margin-top:4px}
+.alerts h3{font-size:13px; font-weight:600; color:var(--muted); margin:14px 0 0}
 
 /* Approvals */
 .req{border:1px solid var(--line); border-radius:12px; padding:14px; display:flex; flex-direction:column}
@@ -234,6 +240,10 @@ dialog::backdrop{background:rgba(20,20,37,.5)}
 .field .err{font-size:13px; color:var(--neg); min-height:0}
 .field.check label{display:flex; align-items:center; gap:10px; cursor:pointer}
 .field.check input{min-height:0; width:18px; height:18px; padding:0; accent-color:var(--accent)}
+.field.days{display:flex; flex-wrap:wrap; gap:8px 14px; border:0; padding:0; margin:0 0 12px}
+.field.days legend{width:100%; margin-bottom:6px; font-weight:600}
+.field.days label{display:flex; align-items:center; gap:6px; font-weight:400}
+.field.days input{min-height:0; width:18px; height:18px; padding:0; accent-color:var(--accent)}
 .field [aria-invalid="true"]{border-color:var(--neg)}
 .row2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
 .dlg-a{display:flex; gap:10px; justify-content:flex-start; margin-top:6px}
@@ -278,3 +288,6 @@ dialog::backdrop{background:rgba(20,20,37,.5)}
 @media (prefers-reduced-motion: reduce){
   *{transition:none !important; animation:none !important}
 }
+
+.panel.notice{border-color:var(--warn); background:var(--warn-soft)}
+.panel.notice p{margin:0 0 12px; font-weight:600; color:var(--warn)}

@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS settings (
   timezone           VARCHAR(64)  NOT NULL DEFAULT 'Asia/Riyadh',
   daily_target_hours DECIMAL(4,2) NOT NULL DEFAULT 8,
   work_start         CHAR(5)      NULL DEFAULT '09:00',
+  work_end           CHAR(5)      NULL,
+  -- Working weekdays, bit 0 = Sunday … bit 6 = Saturday (127 = every day).
+  work_days          TINYINT UNSIGNED NOT NULL DEFAULT 127,
   late_grace_minutes INT          NOT NULL DEFAULT 15,
   breaks_enabled     TINYINT(1)   NOT NULL DEFAULT 0,
   note_on_stop       ENUM('off','optional','required') NOT NULL DEFAULT 'off',

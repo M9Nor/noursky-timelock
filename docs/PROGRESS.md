@@ -4,26 +4,25 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `main` — activity monitoring **phase A** merged and deployed. Migration 004
-  applied to production on 2026-09-30 before the push.
-- **Phase A (live, off by default):** GHL OAuth install callback (tokens stored AES-256-GCM
-  encrypted), `POST /webhooks/events` (Ed25519 `X-GHL-Signature`, 256 KB streaming limit,
-  `GHL_APP_ID` filter on install/uninstall, dedupe on `messageId`), activity metadata only
-  (who / when / kind / type / source — never content) for locations with
-  `activity_monitoring = 1`, 90-day retention, `GET /admin/ghl-connection`, settings
-  toggle + idle threshold + connection status. Test signing key accepted only when
-  `NODE_ENV` is development/test.
-- **Live on Innova (2026-10-02):** Marketplace **2.0.0** published (scope, webhook URL,
-  `OutboundMessage`); Hostinger env complete; Innova updated to 2.0.0 → `ghl_installs` row
-  with `conversations/message.readonly`, settings show "مربوط". Monitoring on; first events
-  stored (IG + Email). The other install is still on 1.0.0.
-- **Finding:** automatic replies arrive **without** `userId`; typed messages carry it;
-  `source` is `app` for both → phase B counts only events with a `userId` (spec §2.1,
-  DECISIONS 2026-10-02).
-- **Next:** phase B (detection, alerts, UI) on the `userId` rule. Still unobserved because
-  Innova lacks the channels: SMS, WhatsApp, calls, comments, mobile app, bulk/workflow.
-- **Tests:** unit 40, frontend 99, smoke 117 local (118 with `GHL_APP_ID=test-app`),
-  108/0 in production mode; build ok.
+- **Branch:** `feature/activity-monitoring-b` — activity monitoring **phase B** implemented and
+  verified locally (to be merged into `main` by the owner; nothing pushed). Phase A is live
+  and deployed. **Migration 005 is NOT yet applied in production; nothing pushed.**
+- **Phase B (local):** migration 005 (`settings.work_end`, `settings.work_days`); `PUT
+  /admin/settings` keeps absent fields; `src/activity.js` pure rules (working hours, event
+  freshness, idle, session summary); a "working, not clocked in" alert opened on webhook arrival
+  inside working hours for known employees only (events <= 6 h old, one open alert per employee),
+  resolved on clock-in, dismissable by the manager, answerable with an employee note (<= 300);
+  idle shown on the live floor (outage guard on our own events, bounded queries); per-session
+  `activity_count` / `longest_idle_sec` stored by `summarizeClosedSessions` (failures logged,
+  never break a request); `/admin/ghl-connection` returns `unknown_active_users`; UI: settings
+  fields + hints, `AlertsPanel`, live-floor chips, session columns, employee banner with inline
+  note error.
+- **Next (owner, in order):** (1) run `migrations/005_working_hours.sql` in phpMyAdmin on
+  production; (2) push `main`; (3) check `/health` and that `/admin/alerts` answers 401 without a
+  token; (4) in Innova's TimeClock settings set "نهاية الدوام" and "أيام الدوام"; then record 005
+  as applied in `migrations/README.md`. Deferred: idle alert, "end at last activity" (spec §11).
+- **Tests:** unit 49, frontend 122, smoke 169/0 locally (only SKIP: foreign-appId without
+  `GHL_APP_ID`), 121/0 in production mode (test-key blocks skip); build ok.
 
 ## In Progress
 - Nothing mid-flight. The frontend redesign (spec `docs/superpowers/specs/2026-09-19-frontend-redesign-design.md`,
@@ -77,6 +76,19 @@ _(overwrite each update)_
 
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
+
+- **2026-10-02** · Activity monitoring **phase B** on `feature/activity-monitoring-b`
+  (spec `docs/superpowers/specs/2026-09-29-activity-monitoring-design.md`, subagent-driven,
+  9 tasks). One alert only: "working, not clocked in" inside working hours; idle is information,
+  not an alert. Absent settings fields are kept on PUT (DECISIONS). Verified: unit 49/0,
+  frontend 122/0, build ok, smoke 169/0 locally and 121/0 in production mode. Migration 005
+  pending in production; not pushed. · commits (oldest first): 0d9d7f6 settings work_end/work_days,
+  cb38f09 activity rules, 676f5c6 not-clocked-in alert, 870884c dismiss/note, dafa2c3 idle +
+  summary + unknown users, afbafc1 summary failures never break a request + bounded scans,
+  f9b6249 settings UI, 908c325 checkbox sizing/bit-mapping, fadd531 alerts panel + chips + session
+  columns, f09bcd9 employee banner, 5a1f94f note errors/double-send guard, plus the docs commit.
+  · files: migrations/005, schema.sql, src/server.js, src/activity.js, scripts/smoke-test.mjs,
+  web/** , CLAUDE.md, docs/**
 
 - **2026-10-02** · Activity monitoring went live on Innova. Routes renamed to
   `/webhooks/events` + `/oauth/callback` (GHL rejects URLs containing "ghl"). Marketplace

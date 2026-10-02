@@ -73,3 +73,21 @@ export function liveTotals(status, nowS) {
     inFixed,
   };
 }
+
+export function formatTime(ts, timeZone) {
+  if (!ts) return "—";
+  const opts = { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
+  try {
+    return new Intl.DateTimeFormat("en-GB", timeZone ? { ...opts, timeZone } : opts).format(new Date(Number(ts) * 1000));
+  } catch {
+    return new Intl.DateTimeFormat("en-GB", opts).format(new Date(Number(ts) * 1000));
+  }
+}
+export function formatIdle(sec) {
+  if (sec == null || !Number.isFinite(Number(sec))) return "—";
+  const m = Math.floor(Number(sec) / 60);
+  if (m < 60) return `${m} د`;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return mm ? `${h} س ${mm} د` : `${h} س`;
+}

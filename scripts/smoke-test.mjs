@@ -462,7 +462,7 @@ check("fixed break window saved",
     && fxSaved.body?.break_end === "14:00" && fxSaved.body?.break_paid === false && fxSaved.body?.breaks_enabled === false,
   `(${JSON.stringify(fxSaved.body)})`);
 check("fixed mode without a window → 400",
-  (await fxPolicy({ break_mode: "fixed" })).body?.error === "INVALID_BREAK_WINDOW");
+  (await fxPolicy({ break_mode: "fixed", break_start: null, break_end: null })).body?.error === "INVALID_BREAK_WINDOW");
 check("fixed window ending before it starts → 400",
   (await fxPolicy({ break_mode: "fixed", break_start: "14:00", break_end: "13:00" })).body?.error === "INVALID_BREAK_WINDOW");
 check("malformed window time → 400",
@@ -692,6 +692,40 @@ if (tdAfter > 0) {
 }
 await cleanupLocation(TDLOC);
 
+// --- Working hours and "absent = keep" (activity phase B, spec §4.2 / §5.4). Own location.
+const WHLOC = `${LOC}-wh`;
+const whMgr = await sso({ userId: `${WHLOC}-m1`, role: "admin", type: "account", activeLocation: WHLOC, userName: "مدير الدوام", email: "whm@x.com" });
+const WHM = whMgr.body?.token;
+const whDefaults = await call(WHM, "GET", "/admin/settings");
+check("working hours default to no end and every day",
+  whDefaults.body?.work_end === null && whDefaults.body?.work_days === 127,
+  `(${JSON.stringify({ e: whDefaults.body?.work_end, d: whDefaults.body?.work_days })})`);
+const whSaved = await call(WHM, "PUT", "/admin/settings",
+  { timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", work_end: "17:30", work_days: 95, idle_minutes: 45 });
+check("work_end and work_days are saved",
+  whSaved.status === 200 && whSaved.body?.work_end === "17:30" && whSaved.body?.work_days === 95,
+  `(${whSaved.status} ${JSON.stringify(whSaved.body)})`);
+const whKeep = await call(WHM, "PUT", "/admin/settings", { late_grace_minutes: 20 });
+check("a field absent from the body keeps its stored value",
+  whKeep.status === 200 && whKeep.body?.late_grace_minutes === 20 && whKeep.body?.timezone === "Asia/Riyadh"
+    && whKeep.body?.work_start === "09:00" && whKeep.body?.work_end === "17:30" && whKeep.body?.work_days === 95
+    && whKeep.body?.idle_minutes === 45,
+  `(${whKeep.status} ${JSON.stringify(whKeep.body)})`);
+check("work_end before work_start → 400",
+  (await call(WHM, "PUT", "/admin/settings", { work_end: "08:00" })).body?.error === "INVALID_WORK_END");
+check("work_end equal to work_start → 400",
+  (await call(WHM, "PUT", "/admin/settings", { work_end: "09:00" })).body?.error === "INVALID_WORK_END");
+check("malformed work_end → 400",
+  (await call(WHM, "PUT", "/admin/settings", { work_end: "5pm" })).body?.error === "INVALID_WORK_END");
+check("moving work_start past the stored work_end → 400",
+  (await call(WHM, "PUT", "/admin/settings", { work_start: "18:00" })).body?.error === "INVALID_WORK_END");
+check("work_days 0 → 400", (await call(WHM, "PUT", "/admin/settings", { work_days: 0 })).body?.error === "INVALID_WORK_DAYS");
+check("work_days 128 → 400", (await call(WHM, "PUT", "/admin/settings", { work_days: 128 })).body?.error === "INVALID_WORK_DAYS");
+check("non-integer work_days → 400", (await call(WHM, "PUT", "/admin/settings", { work_days: "95" })).body?.error === "INVALID_WORK_DAYS");
+const whCleared = await call(WHM, "PUT", "/admin/settings", { work_end: null });
+check("work_end can be cleared with null", whCleared.body?.work_end === null, `(${JSON.stringify(whCleared.body?.work_end)})`);
+await cleanupLocation(WHLOC);
+
 // --- Activity monitoring (phase A): settings, connection status, webhooks, OAuth. ---
 const AWLOC = `${LOC}-aw`;
 const awMgr = await sso({ userId: `${AWLOC}-m1`, role: "admin", type: "account", activeLocation: AWLOC, userName: "مدير النشاط", email: "awm@x.com" });
@@ -825,6 +859,223 @@ if (!awAcceptsTestKey) {
   check("a signed uninstall marks the location disconnected",
     (await call(AWM, "GET", "/admin/ghl-connection")).body?.installed === false);
 }
+
+// --- Not-clocked-in alert (activity phase B, spec §5.3). Own location, UTC, needs the test key.
+const NCLOC = `${LOC}-nc`;
+const ncMgr = await sso({ userId: `${NCLOC}-m1`, role: "admin", type: "account", activeLocation: NCLOC, userName: "مدير التنبيهات", email: "ncm@x.com" });
+const ncE1 = await sso({ userId: `${NCLOC}-u1`, role: "user", type: "account", activeLocation: NCLOC, userName: "موظف أول", email: "nc1@x.com" });
+const ncE2 = await sso({ userId: `${NCLOC}-u2`, role: "user", type: "account", activeLocation: NCLOC, userName: "موظف تاني", email: "nc2@x.com" });
+const NCM = ncMgr.body?.token, NC1 = ncE1.body?.token, NC2 = ncE2.body?.token;
+const ncNow = Math.floor(Date.now() / 1000);
+const ncTod = ncNow % 86400;
+let ncSeq = 0;
+const ncEvent = (userId, at = Math.floor(Date.now() / 1000), key = ++ncSeq) => {
+  const p = { type: "OutboundMessage", locationId: NCLOC, messageType: "SMS", source: "app",
+    dateAdded: new Date(at * 1000).toISOString(), webhookId: `${NCLOC}-w${key}`, messageId: `${NCLOC}-m${key}` };
+  if (userId) p.userId = userId;
+  return ghlWebhook(p);
+};
+const ncOpen = async () => (await call(NCM, "GET", "/admin/alerts?status=open")).body?.alerts ?? [];
+const ncOpenFor = async (uid) => (await ncOpen()).filter((a) => a.user_id === uid);
+const ncHours = (extra) => call(NCM, "PUT", "/admin/settings",
+  { timezone: "UTC", work_start: "00:00", work_end: "23:59", work_days: 127, activity_monitoring: true, ...extra });
+
+if (!awAcceptsTestKey) {
+  console.log("  SKIP  not-clocked-in alert checks (target refuses the test signing key)");
+} else if (ncTod < 120 || ncTod > 86400 - 180) {
+  console.log("  SKIP  not-clocked-in alert checks (too close to UTC midnight)");
+} else {
+  await ncHours({});
+  check("an employee's event inside working hours opens one not-clocked-in alert",
+    (await ncEvent(`${NCLOC}-u1`)).status === 200 && (await ncOpenFor(`${NCLOC}-u1`)).length === 1);
+  const ncA = (await ncOpenFor(`${NCLOC}-u1`))[0];
+  check("the alert carries the kind, the employee's name and the event time",
+    ncA?.kind === "working_not_clocked_in" && ncA?.name === "موظف أول" && Math.abs(Number(ncA?.from_at) - ncNow) <= 10,
+    `(${JSON.stringify(ncA)})`);
+  await ncEvent(`${NCLOC}-u1`);
+  check("a second event keeps a single open alert", (await ncOpenFor(`${NCLOC}-u1`)).length === 1);
+
+  await ncEvent(null);
+  check("an event without a user id opens nothing", (await ncOpen()).length === 1);
+  await ncEvent(`${NCLOC}-m1`);
+  check("a manager's event opens nothing", (await ncOpenFor(`${NCLOC}-m1`)).length === 0);
+  await ncEvent(`${NCLOC}-stranger`);
+  check("a user who never opened TimeClock opens nothing", (await ncOpenFor(`${NCLOC}-stranger`)).length === 0);
+  await ncEvent(`${NCLOC}-u2`, ncNow - 7 * 3600);
+  check("an event older than 6 hours opens nothing", (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
+
+  await call(NC2, "POST", "/session/start");
+  await ncEvent(`${NCLOC}-u2`);
+  check("an employee with an open session gets no alert", (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
+  await call(NC2, "POST", "/session/stop");
+  const ncS2 = (await call(NCM, "GET", `/admin/sessions?from=${ncNow - 86400}&to=${ncNow + 60}&user_id=${NCLOC}-u2`)).body?.sessions?.[0];
+  const ncPinned = ncS2 && (await call(NCM, "PATCH", `/admin/sessions/${ncS2.id}`,
+    { started_at: ncNow - 3600, ended_at: ncNow - 1800, reason: "تثبيت وقت للاختبار" })).status === 200;
+  await ncEvent(`${NCLOC}-u2`, ncNow - 2700);
+  check("an event inside a session that covers its time opens nothing",
+    ncPinned && (await ncOpenFor(`${NCLOC}-u2`)).length === 0, `(pinned ${ncPinned})`);
+  await ncEvent(`${NCLOC}-u2`, ncNow - 5400);
+  check("an event timed before a session that already ended opens nothing (late delivery)",
+    (await ncOpenFor(`${NCLOC}-u2`)).length === 0, `(${JSON.stringify(await ncOpenFor(`${NCLOC}-u2`))})`);
+
+  // A one-hour window twelve hours away from now cannot contain now.
+  const ncFarH = String((Math.floor(ncTod / 3600) + 12) % 24).padStart(2, "0");
+  await ncHours({ work_start: `${ncFarH}:00`, work_end: `${ncFarH}:59` });
+  await ncEvent(`${NCLOC}-u2`);
+  check("an event outside working hours opens nothing", (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
+  await ncHours({ work_days: 127 & ~(1 << new Date().getUTCDay()) });
+  await ncEvent(`${NCLOC}-u2`);
+  check("an event on a day off opens nothing", (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
+  await ncHours({ work_end: null });
+  await ncEvent(`${NCLOC}-u2`);
+  check("without a work_end nothing opens", (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
+  await ncHours({});
+  await ncEvent(`${NCLOC}-u2`, Math.floor(Date.now() / 1000), 9001);
+  check("the same employee inside working hours does get an alert (the checks above are not vacuous)",
+    (await ncOpenFor(`${NCLOC}-u2`)).length === 1);
+
+  check("an employee cannot list alerts", (await call(NC1, "GET", "/admin/alerts")).status === 403);
+  check("an unknown status → 400", (await call(NCM, "GET", "/admin/alerts?status=maybe")).body?.error === "INVALID_STATUS");
+  const ncList = await call(NCM, "GET", "/admin/alerts");
+  check("the alert list reports the location timezone and server time",
+    ncList.body?.timezone === "UTC" && Number.isInteger(ncList.body?.server_time));
+
+  const ncMine = await call(NC2, "GET", "/me/alerts");
+  const ncA2 = ncMine.body?.alerts?.[0];
+  check("an employee sees their own open alert",
+    ncMine.status === 200 && ncMine.body?.alerts?.length === 1 && ncA2?.user_id === `${NCLOC}-u2`
+      && ncMine.body?.timezone === "UTC",
+    `(${JSON.stringify(ncMine.body)})`);
+  check("an empty note → 400", (await call(NC2, "POST", `/me/alerts/${ncA2?.id}/note`, { note: "  " })).body?.error === "NOTE_REQUIRED");
+  check("a note over 300 characters → 400",
+    (await call(NC2, "POST", `/me/alerts/${ncA2?.id}/note`, { note: "x".repeat(301) })).body?.error === "NOTE_TOO_LONG");
+  check("an employee cannot note someone else's alert",
+    (await call(NC1, "POST", `/me/alerts/${ncA2?.id}/note`, { note: "مش إلي" })).body?.error === "ALERT_NOT_FOUND");
+  check("the employee's note is saved",
+    (await call(NC2, "POST", `/me/alerts/${ncA2?.id}/note`, { note: "كنت عم رد على زبون من الموبايل" })).status === 200);
+  check("the manager sees the employee's note",
+    (await ncOpenFor(`${NCLOC}-u2`))[0]?.employee_note === "كنت عم رد على زبون من الموبايل");
+  check("an employee cannot dismiss", (await call(NC2, "POST", `/admin/alerts/${ncA2?.id}/dismiss`)).status === 403);
+  const ncOther = await sso({ userId: `${NCLOC}-x-m1`, role: "admin", type: "account", activeLocation: `${NCLOC}-x`, userName: "مدير غريب", email: "ncx@x.com" });
+  check("another location's manager cannot dismiss it",
+    (await call(ncOther.body?.token, "POST", `/admin/alerts/${ncA2?.id}/dismiss`)).body?.error === "ALERT_NOT_FOUND");
+  check("the manager dismisses it", (await call(NCM, "POST", `/admin/alerts/${ncA2?.id}/dismiss`)).status === 200);
+  check("a dismissed alert leaves the open list and the employee's list",
+    (await ncOpenFor(`${NCLOC}-u2`)).length === 0 && (await call(NC2, "GET", "/me/alerts")).body?.alerts?.length === 0);
+  check("dismissing it again → 404", (await call(NCM, "POST", `/admin/alerts/${ncA2?.id}/dismiss`)).body?.error === "ALERT_NOT_FOUND");
+  check("a note on a dismissed alert → 404",
+    (await call(NC2, "POST", `/me/alerts/${ncA2?.id}/note`, { note: "متأخر" })).body?.error === "ALERT_NOT_FOUND");
+  await ncEvent(`${NCLOC}-u2`, Math.floor(Date.now() / 1000), 9001); // GHL redelivers the same message
+  check("a duplicate delivery of the event that opened a dismissed alert opens nothing",
+    (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
+  await cleanupLocation(`${NCLOC}-x`);
+
+  const ncA1 = (await call(NC1, "GET", "/me/alerts")).body?.alerts?.[0];
+  check("the employee notes their alert before clocking in",
+    (await call(NC1, "POST", `/me/alerts/${ncA1?.id}/note`, { note: "رح ابلّش هلّق" })).status === 200);
+  await call(NC1, "POST", "/session/start");
+  check("clocking in resolves the employee's alert", (await ncOpenFor(`${NCLOC}-u1`)).length === 0);
+  const ncResolved = ((await call(NCM, "GET", "/admin/alerts?status=resolved")).body?.alerts ?? [])
+    .find((a) => a.user_id === `${NCLOC}-u1`);
+  check("the resolved alert says it was resolved by clocking in",
+    ncResolved?.status === "resolved" && ncResolved?.resolution === "clocked_in", `(${JSON.stringify(ncResolved)})`);
+  check("the resolved alert keeps the employee's note and has a resolved_at",
+    ncResolved?.employee_note === "رح ابلّش هلّق" && Number.isInteger(ncResolved?.resolved_at),
+    `(${JSON.stringify(ncResolved)})`);
+  await call(NC1, "POST", "/session/stop");
+}
+await cleanupLocation(NCLOC);
+
+// --- Idle information and session summary (activity phase B, spec §5.3 / §5.6). Local DB only:
+// --- sessions and the monitoring start are backdated directly.
+const IDLOC = `${LOC}-id`;
+const idMgr = await sso({ userId: `${IDLOC}-m1`, role: "admin", type: "account", activeLocation: IDLOC, userName: "مدير الخمول", email: "idm@x.com" });
+const idEmp = await sso({ userId: `${IDLOC}-u1`, role: "user", type: "account", activeLocation: IDLOC, userName: "موظف الخمول", email: "ide@x.com" });
+const IDM = idMgr.body?.token, IDE = idEmp.body?.token;
+let idSeq = 0;
+const idEvent = (userId) => {
+  idSeq++;
+  return ghlWebhook({ type: "OutboundMessage", locationId: IDLOC, userId, messageType: "SMS", source: "app",
+    dateAdded: new Date().toISOString(), webhookId: `${IDLOC}-w${idSeq}`, messageId: `${IDLOC}-m${idSeq}` });
+};
+const idLive = async () => (await call(IDM, "GET", "/admin/live")).body;
+const idMe = async () => (await idLive())?.employees?.find((e) => e.user_id === `${IDLOC}-u1`);
+
+await call(IDM, "PUT", "/admin/settings", { timezone: "UTC", activity_monitoring: true, idle_minutes: 10 });
+check("the employee status says whether monitoring is on",
+  (await call(IDE, "GET", "/me/status")).body?.activity_monitoring === true);
+check("live reports the idle threshold", (await idLive())?.idle_minutes === 10);
+
+const idT = Math.floor(Date.now() / 1000);
+const idBack = await withLocalDb((conn) =>
+  conn.execute("UPDATE settings SET activity_monitoring_since = ? WHERE location_id = ?", [idT - 7200, IDLOC]));
+if (!awAcceptsTestKey || idBack.skipped) {
+  console.log(`  SKIP  idle and summary checks (${idBack.skipped ?? "target refuses the test signing key"})`);
+} else {
+  await call(IDE, "POST", "/session/start");
+  await localRows("UPDATE sessions SET started_at = :s WHERE location_id = :loc AND ended_at IS NULL", { s: idT - 3600, loc: IDLOC });
+  check("no idle time is shown before any event has arrived (outage guard)", (await idMe())?.idle_sec === null);
+
+  await idEvent(`${IDLOC}-stranger`); // someone who never opened TimeClock: proves events arrive
+  const idIdle = await idMe();
+  check("an open session with no activity for an hour shows about an hour idle",
+    Math.abs(Number(idIdle?.idle_sec) - 3600) <= 10 && idIdle?.last_activity_at === null, `(${JSON.stringify(idIdle)})`);
+  check("unknown active users are counted for the connection status",
+    (await call(IDM, "GET", "/admin/ghl-connection")).body?.unknown_active_users === 1);
+
+  await idEvent(`${IDLOC}-u1`);
+  const idActive = await idMe();
+  check("an event resets the idle time",
+    Number(idActive?.idle_sec) <= 10 && Math.abs(Number(idActive?.last_activity_at) - idT) <= 10, `(${JSON.stringify(idActive)})`);
+
+  await call(IDE, "POST", "/session/stop");
+  const idS = (await call(IDM, "GET", `/admin/sessions?from=${idT - 86400}&to=${idT + 60}&user_id=${IDLOC}-u1`)).body?.sessions?.[0];
+  check("stopping stores the session's activity summary",
+    idS?.activity_count === 1 && Math.abs(Number(idS?.longest_idle_sec) - 3600) <= 10, `(${JSON.stringify(idS)})`);
+  const idCsv = await call(IDM, "GET", `/admin/export.csv?from=${idT - 86400}&to=${idT + 60}`);
+  check("the CSV has the activity columns", String(idCsv.body).includes("Longest idle (min)"));
+
+  const idEditEnd = Math.floor(Date.now() / 1000);
+  const idEdit = await call(IDM, "PATCH", `/admin/sessions/${idS?.id}`,
+    { started_at: idEditEnd - 600, ended_at: idEditEnd, reason: "تقصير للاختبار" });
+  const idS2 = (await call(IDM, "GET", `/admin/sessions?from=${idT - 86400}&to=${idT + 60}&user_id=${IDLOC}-u1`)).body?.sessions?.[0];
+  check("a manager edit recomputes the summary",
+    idEdit.status === 200 && idS2?.longest_idle_sec != null && idS2.longest_idle_sec <= 600
+      && idS2?.activity_count === 1, `(${JSON.stringify(idS2)})`);
+
+  await localRows("DELETE FROM activity_events WHERE location_id = :loc", { loc: IDLOC });
+  await call(IDE, "POST", "/session/start");
+  check("with no event in 24 hours idle is not shown", (await idMe())?.idle_sec === null);
+  await call(IDE, "POST", "/session/stop");
+  const idSilent = (await call(IDM, "GET", `/admin/sessions?from=${idT - 86400}&to=${idEditEnd + 600}&user_id=${IDLOC}-u1`)).body?.sessions
+    ?.find((x) => x.id !== idS?.id);
+  check("with no event at the location in the 24 h before it ended, a stopped session keeps a null summary",
+    idSilent && idSilent.ended_at != null && idSilent.activity_count == null && idSilent.longest_idle_sec == null,
+    `(${JSON.stringify(idSilent)})`);
+
+  // A manager edit refills the summary however old the session is (summaries are kept forever).
+  const idOldStart = idT - 10 * 86400;
+  await localRows("UPDATE settings SET activity_monitoring_since = :s WHERE location_id = :loc", { s: idT - 20 * 86400, loc: IDLOC });
+  await localRows(
+    `UPDATE sessions SET started_at = :s, ended_at = :e, duration_sec = 3600, activity_count = NULL,
+            last_activity_at = NULL, longest_idle_sec = NULL WHERE id = :id`,
+    { s: idOldStart, e: idOldStart + 3600, id: idSilent?.id });
+  await localRows(
+    `INSERT INTO activity_events (id, location_id, user_id, occurred_at, kind, message_type, source, webhook_id, created_at)
+     VALUES (:id, :loc, :uid, :at, 'message', 'SMS', 'app', :wh, :t)`,
+    { id: crypto.randomUUID(), loc: IDLOC, uid: `${IDLOC}-u1`, at: idOldStart + 1800, wh: `${IDLOC}-old-w`, t: idT });
+  const idOldEdit = await call(IDM, "PATCH", `/admin/sessions/${idSilent?.id}`,
+    { started_at: idOldStart + 600, ended_at: idOldStart + 3000, reason: "تعديل جلسة قديمة" });
+  const idOld = (await call(IDM, "GET", `/admin/sessions?from=${idOldStart - 86400}&to=${idOldStart + 86400}&user_id=${IDLOC}-u1`)).body?.sessions
+    ?.find((x) => x.id === idSilent?.id);
+  check("a manager edit of a session that ended over 7 days ago still stores its summary",
+    idOldEdit.status === 200 && idOld?.activity_count === 1 && idOld?.longest_idle_sec != null,
+    `(${JSON.stringify(idOld)})`);
+
+  await call(IDM, "PUT", "/admin/settings", { activity_monitoring: false });
+  check("with monitoring off live has no idle threshold", (await idLive())?.idle_minutes === null);
+}
+await cleanupLocation(IDLOC);
 
 const awBig = await ghlWebhook({ type: "OutboundMessage", locationId: AWLOC, pad: "x".repeat(300 * 1024) }, { sign: false });
 check("a webhook over 256 KB → 413 PAYLOAD_TOO_LARGE",

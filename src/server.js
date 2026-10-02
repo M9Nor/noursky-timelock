@@ -12,6 +12,7 @@ import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID }
 import { localZone, localDate, wallToUtc, fixedWindows, localDayBounds } from "./tz.js";
 import { bodyLimit } from "hono/body-limit";
 import { verifyGhlSignature, parseWebhook, testKeyAllowed, isForOurApp, activityDedupeKey } from "./ghlWebhook.js";
+import { isWithinWorkHours, isFreshEvent, idleSeconds, sessionSummary } from "./activity.js";
 import { exchangeCode } from "./ghlOAuth.js";
 import { encryptToken } from "./tokenCrypto.js";
 
@@ -44,6 +45,9 @@ const pool = mysql.createPool({
 pool.on("connection", (conn) => conn.query("SET time_zone = '+00:00'"));
 
 const now = () => Math.floor(Date.now() / 1000);
+// Trimmed: a stray space pasted into hPanel would otherwise reject every install event.
+const GHL_APP_ID = (env.GHL_APP_ID ?? "").trim() || null;
+const numOrNull = (v) => (v == null ? null : Number(v));
 
 class HttpError extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -280,6 +284,135 @@ async function autoCloseStale(loc = null) {
         AND (:loc IS NULL OR b.location_id = :loc)`,
     { loc }
   );
+  await summarizeClosedSessions(loc).catch((e) => console.error("[activity-summary]", e));
+}
+
+/** Break intervals of one session as [start, end|null], plus its fixed windows (paid ones too). */
+async function sessionBreaks(session, st, until) {
+  const rows = await q("SELECT started_at, ended_at FROM breaks WHERE session_id = :sid", { sid: session.id });
+  const out = rows.map((b) => [Number(b.started_at), b.ended_at == null ? null : Number(b.ended_at)]);
+  if (st?.break_mode === "fixed" && st.break_start && st.break_end) {
+    out.push(...fixedWindows(st.timezone, Number(session.started_at), until, st.break_start, st.break_end));
+  }
+  return out;
+}
+
+/** This employee's counted events (with a user id) inside [from, to]. */
+async function eventTimes(loc, uid, from, to) {
+  const rows = await q(
+    `SELECT occurred_at FROM activity_events
+      WHERE location_id = :loc AND user_id = :uid AND occurred_at >= :from AND occurred_at <= :to`,
+    { loc, uid, from, to }
+  );
+  return rows.map((r) => Number(r.occurred_at));
+}
+
+/**
+ * Computes and stores one closed session's activity summary (spec §5.6). Used for every
+ * close path via summarizeClosedSessions, and directly after a manager edit, which must
+ * refill the summary however old the session is (summaries are kept forever). A location
+ * that never had monitoring has no activity_monitoring_since, and sessionSummary returns
+ * null for a session monitoring did not cover. Outage guard: with no event at all at the
+ * location in the 24 h before the session ended, the summary stays NULL ("—") instead of
+ * being stored as "0 activity, long idle" — the location may not send events (not updated
+ * to the 2.0.0 app, a GHL outage).
+ */
+async function summarizeSession(loc, st, session) {
+  if (st?.activity_monitoring_since == null) return;
+  const since = Number(st.activity_monitoring_since);
+  const start = Number(session.started_at), end = Number(session.ended_at);
+  const [fresh] = await q(
+    `SELECT 1 AS ok FROM activity_events
+      WHERE location_id = :loc AND occurred_at > :from AND occurred_at <= :end LIMIT 1`,
+    { loc, from: end - 86400, end }
+  );
+  if (!fresh) return;
+  const sum = sessionSummary({
+    startedAt: start, endedAt: end, monitoringSince: since,
+    eventTimes: await eventTimes(loc, session.user_id, start, end),
+    breaks: await sessionBreaks(session, st, end),
+  });
+  if (!sum) return;
+  // Only if the row still has the bounds read above: a concurrent manager edit nulls the
+  // summary and changes them, and must not be overwritten with a summary of the old bounds.
+  await q(
+    `UPDATE sessions SET activity_count = :n, last_activity_at = :last, longest_idle_sec = :idle
+      WHERE id = :id AND activity_count IS NULL AND started_at = :s AND ended_at = :e`,
+    { n: sum.activity_count, last: sum.last_activity_at, idle: sum.longest_idle_sec, id: session.id, s: start, e: end }
+  );
+}
+
+/**
+ * Stores the activity summary (spec §5.6) of recently closed sessions that have none, for
+ * locations with monitoring on. Every close path ends up here — /session/stop, auto-close,
+ * and a manager edit (which clears the summary first) — so the rule lives in one place.
+ * A session that closed while monitoring was off keeps NULL, shown as "—".
+ */
+async function summarizeClosedSessions(loc = null) {
+  const locs = loc
+    ? [loc]
+    : (await q("SELECT location_id FROM settings WHERE activity_monitoring = 1")).map((r) => r.location_id);
+  const t = now();
+  for (const l of locs) {
+    try {
+      const st = await getSettings(l);
+      if (!st?.activity_monitoring || st.activity_monitoring_since == null) continue;
+      const since = Number(st.activity_monitoring_since);
+      // Sessions are <= max_session_hours (<= 24 h) unless a manager edit stretched them, so
+      // 9 days of start times covers every session that ended in the last 7.
+      const rows = await q(
+        `SELECT id, user_id, started_at, ended_at FROM sessions
+          WHERE location_id = :loc AND started_at >= :scanFrom AND ended_at IS NOT NULL
+            AND activity_count IS NULL AND ended_at > :since AND ended_at > :recent
+          ORDER BY ended_at DESC
+          LIMIT 50`,
+        { loc: l, since, recent: t - 7 * 86400, scanFrom: t - 9 * 86400 }
+      );
+      for (const s of rows) await summarizeSession(l, st, s);
+    } catch (e) {
+      console.error("[activity-summary]", l, e);
+    }
+  }
+}
+
+/**
+ * Per-employee activity for the live floor (spec §5.3): idle seconds of open sessions, and
+ * who is working without a session. Idle is null when monitoring is off or when the
+ * location's newest event is over 24 h old (outage guard — other apps' events also refresh
+ * ghl_installs.last_event_at, so that column is not used here).
+ */
+async function liveActivity(loc, st, employees, t) {
+  const blank = () => ({ last_activity_at: null, idle_sec: null, active_without_session: false });
+  const out = new Map(employees.map((e) => [e.user_id, blank()]));
+  if (!st?.activity_monitoring) return out;
+  const nci = await q(
+    `SELECT user_id FROM activity_alerts
+      WHERE location_id = :loc AND kind = 'working_not_clocked_in' AND status = 'open'`,
+    { loc }
+  );
+  for (const r of nci) if (out.has(r.user_id)) out.get(r.user_id).active_without_session = true;
+  const [fresh] = await q(
+    "SELECT 1 AS ok FROM activity_events WHERE location_id = :loc AND occurred_at > :cutoff LIMIT 1",
+    { loc, cutoff: t - 86400 }
+  );
+  if (!fresh) return out;
+  for (const e of employees) {
+    if (!e.session_id) continue;
+    const start = Number(e.started_at);
+    const [last] = await q(
+      `SELECT MAX(occurred_at) AS at FROM activity_events
+        WHERE location_id = :loc AND user_id = :uid AND occurred_at >= :from AND occurred_at <= :t`,
+      { loc, uid: e.user_id, from: start, t }
+    );
+    const lastEventAt = last?.at == null ? null : Number(last.at);
+    const row = out.get(e.user_id);
+    row.last_activity_at = lastEventAt;
+    row.idle_sec = idleSeconds({
+      startedAt: start, monitoringSince: st.activity_monitoring_since, lastEventAt, now: t,
+      breaks: await sessionBreaks({ id: e.session_id, started_at: start }, st, t),
+    });
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -404,6 +537,7 @@ app.get("/me/status", authed, async (c) => {
     fixed_break: fixedBreak,
     // Lets the screen refresh at local midnight, when "today" starts over.
     day_ends_at: dayEnd,
+    activity_monitoring: Boolean(st?.activity_monitoring),
     server_time: t,
   });
 });
@@ -441,6 +575,35 @@ app.get("/me/sessions", authed, async (c) => {
   return c.json({ sessions, timezone: st?.timezone ?? "Asia/Riyadh" });
 });
 
+const ALERT_NOTE_MAX = 300;
+
+app.get("/me/alerts", authed, async (c) => {
+  const { uid, loc } = c.get("claims");
+  const alerts = (await q(
+    `SELECT ${ALERT_COLUMNS} FROM activity_alerts a
+      WHERE a.location_id = :loc AND a.user_id = :uid AND a.status = 'open'
+      ORDER BY a.from_at DESC`,
+    { loc, uid }
+  )).map(alertRow);
+  const st = await getSettings(loc);
+  return c.json({ alerts, timezone: st?.timezone ?? "Asia/Riyadh", server_time: now() });
+});
+
+app.post("/me/alerts/:id/note", authed, async (c) => {
+  const { uid, loc } = c.get("claims");
+  const body = (await c.req.json().catch(() => null)) ?? {};
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  if (!note) throw new HttpError(400, "NOTE_REQUIRED");
+  if (note.length > ALERT_NOTE_MAX) throw new HttpError(400, "NOTE_TOO_LONG");
+  const r = await q(
+    `UPDATE activity_alerts SET employee_note = :note, employee_note_at = :t
+      WHERE id = :id AND location_id = :loc AND user_id = :uid AND status = 'open'`,
+    { note, t: now(), id: c.req.param("id"), loc, uid }
+  );
+  if (!r.affectedRows) throw new HttpError(404, "ALERT_NOT_FOUND");
+  return c.json({ ok: true });
+});
+
 app.post("/session/start", authed, async (c) => {
   const { uid, loc } = c.get("claims");
   await autoCloseStale(loc);
@@ -455,6 +618,13 @@ app.post("/session/start", authed, async (c) => {
     if (e.code === "ER_DUP_ENTRY") throw new HttpError(409, "SESSION_ALREADY_OPEN");
     throw e;
   }
+  // Clocking in answers any open "working, not clocked in" alert (spec §5.3).
+  await q(
+    `UPDATE activity_alerts
+        SET status = 'resolved', resolution = 'clocked_in', resolved_by = 'system', resolved_at = :t
+      WHERE location_id = :loc AND user_id = :uid AND kind = 'working_not_clocked_in' AND status = 'open'`,
+    { loc, uid, t }
+  );
   return c.json({ id, started_at: t }, 201);
 });
 
@@ -571,6 +741,7 @@ app.post("/session/stop", authed, async (c) => {
       { id: s.id, t, st: s.started_at }
     );
     await conn.commit();
+    await summarizeClosedSessions(loc).catch((e) => console.error("[activity-summary]", e));
     return c.json({
       id: s.id, started_at: s.started_at, ended_at: t,
       duration_sec: t - s.started_at, break_sec: Number(brk.break_sec), note,
@@ -598,7 +769,14 @@ app.get("/admin/live", authed, managerOnly, async (c) => {
     { loc }
   );
   const t = now();
-  return c.json({ server_time: t, fixed_break: todayFixedBreak(await getSettings(loc), t), employees });
+  const st = await getSettings(loc);
+  const activity = await liveActivity(loc, st, employees, t);
+  return c.json({
+    server_time: t,
+    fixed_break: todayFixedBreak(st, t),
+    idle_minutes: st?.activity_monitoring ? Number(st.idle_minutes) : null,
+    employees: employees.map((e) => ({ ...e, ...activity.get(e.user_id) })),
+  });
 });
 
 // Every local day overlapping [from, to) starts at most ~14h before `from` and ends at
@@ -707,6 +885,7 @@ app.get("/admin/sessions", authed, managerOnly, async (c) => {
   await autoCloseStale(loc);
   const sessions = (await q(
     `SELECT s.id, s.user_id, e.name, s.started_at, s.ended_at, s.duration_sec, s.closed_by, s.note,
+            s.activity_count, s.longest_idle_sec,
             ${BREAK_SEC_EXPR} AS break_sec
        FROM sessions s
        JOIN employees e ON e.user_id = s.user_id AND e.location_id = s.location_id
@@ -715,7 +894,12 @@ app.get("/admin/sessions", authed, managerOnly, async (c) => {
       ORDER BY s.started_at DESC
       LIMIT 1000`,
     { loc, from, to, uid, now: now() }
-  )).map((r) => ({ ...r, break_sec: Number(r.break_sec) }));
+  )).map((r) => ({
+    ...r,
+    break_sec: Number(r.break_sec),
+    activity_count: numOrNull(r.activity_count),
+    longest_idle_sec: numOrNull(r.longest_idle_sec),
+  }));
 
   // Annotate each session with how late it was, so the manager can audit the
   // late_days count in /admin/report instead of just seeing a total.
@@ -782,7 +966,8 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
     if (!rows.length) throw new HttpError(404, "SESSION_NOT_FOUND");
     const old = rows[0];
     await conn.execute(
-      `UPDATE sessions SET started_at = :s, ended_at = :e, duration_sec = :dur, closed_by = 'admin'
+      `UPDATE sessions SET started_at = :s, ended_at = :e, duration_sec = :dur, closed_by = 'admin',
+                           activity_count = NULL, last_activity_at = NULL, longest_idle_sec = NULL
         WHERE id = :id AND location_id = :loc`,
       { s, e, dur: e - s, id, loc }
     );
@@ -802,6 +987,10 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
       }
     );
     await conn.commit();
+    // The edit cleared the summary: refill it whatever the session's age (the periodic pass
+    // only looks at recent ones), as long as monitoring was ever on here.
+    await summarizeSession(loc, st, { id, user_id: old.user_id, started_at: s, ended_at: e })
+      .catch((err) => console.error("[activity-summary]", err));
     return c.json({ id, started_at: s, ended_at: e, duration_sec: e - s, closed_by: "admin" });
   } catch (err) {
     await conn.rollback().catch(() => {});
@@ -819,6 +1008,7 @@ app.get("/admin/export.csv", authed, managerOnly, async (c) => {
   const tz = (await getSettings(loc))?.timezone ?? "Asia/Riyadh";
   const rows = await q(
     `SELECT e.name, e.email, s.started_at, s.ended_at, s.duration_sec, s.closed_by, s.note,
+            s.activity_count, s.longest_idle_sec,
             ${BREAK_SEC_EXPR} AS break_sec
        FROM sessions s
        JOIN employees e ON e.user_id = s.user_id AND e.location_id = s.location_id
@@ -845,10 +1035,11 @@ app.get("/admin/export.csv", authed, managerOnly, async (c) => {
     return s > 0 ? Math.max(1, Math.round(s / 60)) : 0;
   };
   const lines = [
-    ["Employee", "Email", "Start", "End", "Hours", "Break (min)", "Closed by", "Note"],
+    ["Employee", "Email", "Start", "End", "Hours", "Break (min)", "Closed by", "Note", "Activity", "Longest idle (min)"],
     ...rows.map((r) => [r.name, r.email, fmt(r.started_at), fmt(r.ended_at),
       r.duration_sec ? (Math.max(0, Number(r.duration_sec) - Number(r.break_sec)) / 3600).toFixed(2) : "",
-      breakMin(r.break_sec), r.closed_by ?? "open", r.note ?? ""]),
+      breakMin(r.break_sec), r.closed_by ?? "open", r.note ?? "",
+      r.activity_count ?? "", r.longest_idle_sec == null ? "" : Math.round(Number(r.longest_idle_sec) / 60)]),
   ];
   const csv = "\uFEFF" + lines.map((l) => l.map(esc).join(",")).join("\r\n"); // BOM → Excel reads Arabic
   return c.body(csv, 200, {
@@ -875,13 +1066,63 @@ app.get("/admin/ghl-connection", authed, managerOnly, async (c) => {
     "SELECT COUNT(*) AS n FROM activity_events WHERE location_id = :loc AND occurred_at >= :since",
     { loc, since: now() - 86400 }
   );
+  // Counted events (with a user id) from people who never opened TimeClock here (spec §5.4).
+  const [unknown] = await q(
+    `SELECT COUNT(DISTINCT a.user_id) AS n
+       FROM activity_events a
+       LEFT JOIN employees e ON e.user_id = a.user_id AND e.location_id = a.location_id
+      WHERE a.location_id = :loc AND a.user_id IS NOT NULL AND a.occurred_at >= :since AND e.user_id IS NULL`,
+    { loc, since: now() - 7 * 86400 }
+  );
   const scopes = String(row?.scopes ?? "").split(/[\s,]+/).filter(Boolean);
   return c.json({
     installed: Boolean(row?.installed_at && !row?.uninstalled_at),
     has_activity_scope: scopes.includes(ACTIVITY_SCOPE),
     last_event_at: row?.last_event_at == null ? null : Number(row.last_event_at),
     events_24h: Number(cnt.n),
+    unknown_active_users: Number(unknown.n),
   });
+});
+
+const ALERT_STATUSES = ["open", "resolved", "dismissed"];
+const ALERT_COLUMNS = `a.id, a.user_id, a.kind, a.from_at, a.to_at, a.status, a.resolution,
+  a.employee_note, a.employee_note_at, a.detected_at, a.resolved_at`;
+/** BIGINT columns as plain numbers, so the UI never sees a string timestamp. */
+function alertRow(r) {
+  return {
+    ...r,
+    from_at: Number(r.from_at), to_at: numOrNull(r.to_at), detected_at: Number(r.detected_at),
+    employee_note_at: numOrNull(r.employee_note_at), resolved_at: numOrNull(r.resolved_at),
+  };
+}
+
+app.get("/admin/alerts", authed, managerOnly, async (c) => {
+  const { loc } = c.get("claims");
+  const status = c.req.query("status") ?? "open";
+  if (!ALERT_STATUSES.includes(status)) throw new HttpError(400, "INVALID_STATUS");
+  const alerts = (await q(
+    `SELECT ${ALERT_COLUMNS}, e.name
+       FROM activity_alerts a
+       LEFT JOIN employees e ON e.user_id = a.user_id AND e.location_id = a.location_id
+      WHERE a.location_id = :loc AND a.status = :status
+      ORDER BY a.from_at DESC, a.id DESC
+      LIMIT 200`,
+    { loc, status }
+  )).map(alertRow);
+  const st = await getSettings(loc);
+  return c.json({ alerts, timezone: st?.timezone ?? "Asia/Riyadh", server_time: now() });
+});
+
+app.post("/admin/alerts/:id/dismiss", authed, managerOnly, async (c) => {
+  const { loc, uid } = c.get("claims");
+  const r = await q(
+    `UPDATE activity_alerts
+        SET status = 'dismissed', resolution = 'dismissed', resolved_by = :uid, resolved_at = :t
+      WHERE id = :id AND location_id = :loc AND status = 'open'`,
+    { id: c.req.param("id"), loc, uid, t: now() }
+  );
+  if (!r.affectedRows) throw new HttpError(404, "ALERT_NOT_FOUND");
+  return c.json({ ok: true });
 });
 
 app.put("/admin/settings", authed, managerOnly, async (c) => {
@@ -890,41 +1131,56 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   // otherwise saving a new policy would silently drop them.
   await recordOpenFixedBreaks(loc);
   const b = (await c.req.json().catch(() => null)) ?? {};
-  try { new Intl.DateTimeFormat("en", { timeZone: b.timezone }); } catch { throw new HttpError(400, "INVALID_TIMEZONE"); }
-  if (!b.timezone) throw new HttpError(400, "INVALID_TIMEZONE");
-  const target = Number(b.daily_target_hours), max = Number(b.max_session_hours);
+  // A field absent from the body keeps its stored value (spec §5.4): a page running an older
+  // bundle does not know newer fields and must not reset them. null / "" keep their meaning
+  // (a cleared value, or the documented default).
+  const cur = (await getSettings(loc)) ?? {};
+  const has = (k) => b[k] !== undefined;
+  const pick = (k) => (has(k) ? b[k] : cur[k]);
+
+  const timezone = pick("timezone");
+  if (!timezone) throw new HttpError(400, "INVALID_TIMEZONE");
+  try { new Intl.DateTimeFormat("en", { timeZone: timezone }); } catch { throw new HttpError(400, "INVALID_TIMEZONE"); }
+  const target = Number(pick("daily_target_hours")), max = Number(pick("max_session_hours"));
   if (!(target > 0 && target <= 24) || !(max >= 1 && max <= 24)) throw new HttpError(400, "INVALID_HOURS");
-  if (b.work_start && !HHMM.test(b.work_start)) throw new HttpError(400, "INVALID_WORK_START");
-  // Absent / null / empty-string grace falls back to the 15-minute default: an emptied
-  // UI field arrives as "" and Number("") === 0, which would silently make the policy
-  // "late one second after work_start". An explicit numeric 0 still means "no grace".
-  const rawGrace = b.late_grace_minutes;
+  const workStart = (has("work_start") ? b.work_start : cur.work_start) || null;
+  if (workStart && !HHMM.test(workStart)) throw new HttpError(400, "INVALID_WORK_START");
+  // Same-day hours only; zero-padded HH:MM compares correctly as strings.
+  const workEnd = (has("work_end") ? b.work_end : cur.work_end) || null;
+  if (workEnd && (!HHMM.test(workEnd) || (workStart && workEnd <= workStart))) {
+    throw new HttpError(400, "INVALID_WORK_END");
+  }
+  const workDays = has("work_days") ? b.work_days : (cur.work_days ?? 127);
+  if (!Number.isInteger(workDays) || workDays < 1 || workDays > 127) throw new HttpError(400, "INVALID_WORK_DAYS");
+  // null / "" grace means the 15-minute default: an emptied UI field arrives as "" and
+  // Number("") === 0, which would silently mean "late one second after work_start".
+  const rawGrace = pick("late_grace_minutes");
   const grace = rawGrace === undefined || rawGrace === null || rawGrace === "" ? 15 : Number(rawGrace);
   if (!Number.isInteger(grace) || grace < 0 || grace > 240) throw new HttpError(400, "INVALID_GRACE");
-  // PUT replaces the whole policy: an omitted field means the default, not "unchanged".
-  if (b.breaks_enabled !== undefined && typeof b.breaks_enabled !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
-  // A stale tab running the previous bundle sends only breaks_enabled; map it so saving
+  if (has("breaks_enabled") && typeof b.breaks_enabled !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
+  // A stale tab running a much older bundle sends only breaks_enabled; map it so saving
   // there keeps a flexible-break policy instead of silently switching breaks off.
-  const breakMode = b.break_mode ?? (b.breaks_enabled === true ? "flexible" : "off");
+  const breakMode = b.break_mode
+    ?? (has("breaks_enabled") ? (b.breaks_enabled ? "flexible" : "off") : (cur.break_mode ?? "off"));
   if (!BREAK_MODES.includes(breakMode)) throw new HttpError(400, "INVALID_BREAK_MODE");
-  const breakStart = b.break_start || null, breakEnd = b.break_end || null;
+  const breakStart = (has("break_start") ? b.break_start : cur.break_start) || null;
+  const breakEnd = (has("break_end") ? b.break_end : cur.break_end) || null;
   if ((breakStart && !HHMM.test(breakStart)) || (breakEnd && !HHMM.test(breakEnd))) {
     throw new HttpError(400, "INVALID_BREAK_WINDOW");
   }
-  // Same-day windows only; zero-padded HH:MM compares correctly as strings.
   if (breakMode === "fixed" && (!breakStart || !breakEnd || breakStart >= breakEnd)) {
     throw new HttpError(400, "INVALID_BREAK_WINDOW");
   }
-  const breakPaid = b.break_paid === undefined ? false : b.break_paid;
+  const breakPaid = has("break_paid") ? b.break_paid : Boolean(cur.break_paid);
   if (typeof breakPaid !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
-  const notePolicy = b.note_on_stop === undefined ? "off" : b.note_on_stop;
+  const notePolicy = pick("note_on_stop") ?? "off";
   if (!NOTE_POLICIES.includes(notePolicy)) throw new HttpError(400, "INVALID_NOTE_POLICY");
-  if (b.activity_monitoring !== undefined && typeof b.activity_monitoring !== "boolean") {
+  if (has("activity_monitoring") && typeof b.activity_monitoring !== "boolean") {
     throw new HttpError(400, "INVALID_ACTIVITY_MONITORING");
   }
-  const monitoring = b.activity_monitoring === true;
-  // Same empty-field rule as the grace: "" / null / absent mean the 30-minute default.
-  const rawIdle = b.idle_minutes;
+  const monitoring = has("activity_monitoring") ? b.activity_monitoring : Boolean(cur.activity_monitoring);
+  // Same empty-field rule as the grace: "" / null mean the 30-minute default.
+  const rawIdle = pick("idle_minutes");
   const idleMinutes = rawIdle === undefined || rawIdle === null || rawIdle === "" ? 30 : Number(rawIdle);
   if (!Number.isInteger(idleMinutes) || idleMinutes < 10 || idleMinutes > 240) {
     throw new HttpError(400, "INVALID_IDLE_MINUTES");
@@ -933,7 +1189,9 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   // break_policy_since moves to now only when the break policy itself changes. It is
   // assigned FIRST so it compares against the stored values: MySQL evaluates single-table
   // SET assignments left to right (MariaDB may use the old values throughout) — both see
-  // the old break_* columns here. One statement, so no read-then-write race.
+  // the old break_* columns here. The break_policy_since comparison is one statement; the
+  // settings were read before it, so two concurrent partial saves can lose one (acceptable:
+  // the app always sends the whole form).
   await q(
     `UPDATE settings SET break_policy_since = IF(break_mode <=> :breakMode AND break_start <=> :breakStart
                                                   AND break_end <=> :breakEnd AND break_paid <=> :breakPaid,
@@ -941,6 +1199,7 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
                          activity_monitoring_since = IF(activity_monitoring = 0 AND :monitoring = 1,
                                                         :t, activity_monitoring_since),
                          timezone = :tz, daily_target_hours = :target, work_start = :ws,
+                         work_end = :we, work_days = :wd,
                          late_grace_minutes = :grace, max_session_hours = :max,
                          breaks_enabled = :breaksEnabled, break_mode = :breakMode,
                          break_start = :breakStart, break_end = :breakEnd, break_paid = :breakPaid,
@@ -948,7 +1207,7 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
                          note_on_stop = :notePolicy, updated_at = :t
       WHERE location_id = :loc`,
     {
-      tz: b.timezone, target, ws: b.work_start ?? null, grace, max,
+      tz: timezone, target, ws: workStart, we: workEnd, wd: workDays, grace, max,
       // Kept in sync so code that still reads breaks_enabled behaves the same.
       breaksEnabled: breakMode === "flexible" ? 1 : 0, breakMode, breakStart, breakEnd,
       breakPaid: breakPaid ? 1 : 0, notePolicy, t: now(), loc,
@@ -993,6 +1252,36 @@ const webhookBodyLimit = bodyLimit({
 // One log line per minute at most, so a flood of bad signatures cannot flood the log.
 let lastBadSignatureLogAt = 0;
 
+// Logged once per process: an install event for another app is normal (GHL signs every
+// app's events with one key), but a first mismatch is worth seeing in case GHL_APP_ID is wrong.
+let loggedForeignAppId = false;
+
+/**
+ * Opens a "working, not clocked in" alert for one stored event when every rule of spec §5.3
+ * holds: fresh event, inside working hours, an employee (not a manager) we know, and no
+ * session open or ending after the event. ux_alert_nci_open keeps one open alert per employee,
+ * so a burst of events — or two concurrent deliveries — opens exactly one (INSERT IGNORE).
+ */
+async function openNotClockedInAlert(st, loc, uid, at, t) {
+  if (!isFreshEvent(at, t) || !isWithinWorkHours(st, at)) return;
+  const [emp] = await q(
+    `SELECT 1 AS ok FROM employees
+      WHERE location_id = :loc AND user_id = :uid AND role = 'employee' AND is_active = 1`,
+    { loc, uid }
+  );
+  if (!emp) return;
+  // One statement, so a clock-in racing this event cannot leave a stale alert: nothing opens
+  // while a session is open or when one ended after the event time (a late or repeated
+  // delivery of an event from a shift that is already over).
+  await q(
+    `INSERT IGNORE INTO activity_alerts (id, location_id, user_id, session_id, kind, from_at, detected_at, status)
+     SELECT :id, :loc, :uid, NULL, 'working_not_clocked_in', :at, :t, 'open' FROM DUAL
+      WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE location_id = :loc AND user_id = :uid
+                          AND (ended_at IS NULL OR ended_at > :at))`,
+    { id: randomUUID(), loc, uid, at, t }
+  );
+}
+
 // GHL refuses any URL in the app settings that mentions HighLevel ("ghl"), so the public
 // paths are neutral: /webhooks/events and /oauth/callback.
 app.post("/webhooks/events", webhookBodyLimit, async (c) => {
@@ -1018,7 +1307,13 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
 
   if (ev.event === "install" || ev.event === "uninstall") {
     // GHL signs all apps' events with one key: ignore (but acknowledge) another app's.
-    if (!isForOurApp(ev, env.GHL_APP_ID)) return c.json({ ok: true });
+    if (!isForOurApp(ev, GHL_APP_ID)) {
+      if (!loggedForeignAppId) {
+        loggedForeignAppId = true;
+        console.warn("[webhook] install/uninstall for another app ignored", { appId: ev.appId ?? null });
+      }
+      return c.json({ ok: true });
+    }
     const installed = ev.event === "install";
     await q(
       `INSERT INTO ghl_installs (location_id, company_id, installed_at, uninstalled_at, last_event_at, updated_at)
@@ -1040,12 +1335,12 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
   );
 
   if (ev.event === "activity") {
-    const [st] = await q("SELECT activity_monitoring FROM settings WHERE location_id = :loc", { loc: ev.locationId });
+    const st = await getSettings(ev.locationId);
     if (st?.activity_monitoring) {
       // GHL retries a failed delivery up to 12 times, and the same message can arrive again
       // through another app with a new webhookId: the key prefers the message id.
       const webhookId = activityDedupeKey(ev, raw);
-      await q(
+      const stored = await q(
         `INSERT IGNORE INTO activity_events
            (id, location_id, user_id, occurred_at, kind, message_type, source, webhook_id, created_at)
          VALUES (:id, :loc, :uid, :at, :kind, :messageType, :source, :webhookId, :t)`,
@@ -1056,6 +1351,9 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
           webhookId, t,
         }
       );
+      // Only an event with a user id is a person's activity (spec §2.1). A duplicate delivery
+      // (nothing stored) opens nothing: its first delivery already did, or was dismissed.
+      if (ev.userId && stored.affectedRows > 0) await openNotClockedInAlert(st, ev.locationId, String(ev.userId), ev.occurredAt, t);
     }
   }
   return c.json({ ok: true });

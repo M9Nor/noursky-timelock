@@ -3,6 +3,9 @@ import Button from "./Button.jsx";
 import { useToast } from "./ToastContext.jsx";
 import { formatStamp } from "../time.js";
 
+// Saturday first, as the week reads in the region; bit = JavaScript getDay() (0 = Sunday).
+const WEEK = [["السبت", 6], ["الأحد", 0], ["الاثنين", 1], ["الثلاثاء", 2], ["الأربعاء", 3], ["الخميس", 4], ["الجمعة", 5]];
+
 export default function SettingsPanel({ api }) {
   const [s, setS] = useState(null);
   const [error, setError] = useState("");
@@ -35,6 +38,8 @@ export default function SettingsPanel({ api }) {
         daily_target_hours: Number(s.daily_target_hours),
         max_session_hours: Number(s.max_session_hours),
         work_start: s.work_start || null,
+        work_end: s.work_end || null,
+        work_days: s.work_days ?? 127,
         // An emptied field is "" — Number("") is 0, which would silently mean
         // "late one second after work_start". Treat empty/absent as the default.
         late_grace_minutes: s.late_grace_minutes === "" || s.late_grace_minutes == null
@@ -54,6 +59,8 @@ export default function SettingsPanel({ api }) {
       setError(e.code === "INVALID_TIMEZONE" ? "المنطقة الزمنية غير صحيحة"
         : e.code === "INVALID_HOURS" ? "الساعات غير صحيحة"
         : e.code === "INVALID_WORK_START" ? "وقت البداية غير صحيح"
+        : e.code === "INVALID_WORK_END" ? "نهاية الدوام غير صحيحة (لازم تكون بعد البداية)"
+        : e.code === "INVALID_WORK_DAYS" ? "اختار يوم دوام واحد على الأقل"
         : e.code === "INVALID_GRACE" ? "سماح التأخير غير صحيح"
         : e.code === "INVALID_BREAKS" ? "إعداد الاستراحات غير صحيح"
         : e.code === "INVALID_BREAK_MODE" ? "نوع الاستراحة غير صحيح"
@@ -72,6 +79,20 @@ export default function SettingsPanel({ api }) {
       <div className="field"><label>الهدف اليومي (ساعات)</label><input type="number" step="0.5" value={s.daily_target_hours} onChange={set("daily_target_hours")} /></div>
       <div className="field"><label>حد الجلسة (ساعات)</label><input type="number" step="0.5" value={s.max_session_hours} onChange={set("max_session_hours")} /></div>
       <div className="field"><label htmlFor="work-start">بداية الدوام (HH:MM)</label><input id="work-start" value={s.work_start ?? ""} onChange={set("work_start")} /></div>
+      <div className="field"><label htmlFor="work-end">نهاية الدوام (HH:MM)</label><input id="work-end" value={s.work_end ?? ""} onChange={set("work_end")} /></div>
+      <fieldset className="field days">
+        <legend>أيام الدوام</legend>
+        {WEEK.map(([name, bit]) => {
+          const days = s.work_days ?? 127;
+          return (
+            <label key={bit}>
+              <input type="checkbox" checked={Boolean(days & (1 << bit))}
+                onChange={(e) => setS({ ...s, work_days: e.target.checked ? days | (1 << bit) : days & ~(1 << bit) })} />
+              {name}
+            </label>
+          );
+        })}
+      </fieldset>
       <div className="field"><label htmlFor="grace">سماح التأخير (دقائق)</label><input id="grace" type="number" step="1" min="0" max="240" value={s.late_grace_minutes ?? 15} onChange={set("late_grace_minutes")} /></div>
       <div className="field">
         <label htmlFor="break-mode">نوع الاستراحة</label>
@@ -112,6 +133,12 @@ export default function SettingsPanel({ api }) {
       <div className="field">
         <p className="hint" role="status" aria-label="حالة الربط مع GHL">{connectionText}</p>
         <p className="hint">لازم يكون الموظفين عارفين إنه نشاطهم مراقب.</p>
+        {s.activity_monitoring && (!s.work_start || !s.work_end) && (
+          <p className="hint">حدّد بداية ونهاية الدوام لتشتغل تنبيهات العمل بدون دوام</p>
+        )}
+        {conn?.unknown_active_users > 0 && (
+          <p className="hint">في نشاط بآخر 7 أيام من {conn.unknown_active_users} مستخدمين ما فتحوا TimeClock بعد</p>
+        )}
       </div>
       {error && <div className="field"><span className="err">{error}</span></div>}
       <div className="dlg-a"><Button onClick={save}>حفظ</Button></div>

@@ -9,7 +9,7 @@
     "build": "node scripts/build-web.mjs",
     "postinstall": "node scripts/build-web.mjs",
     "test:smoke": "node scripts/smoke-test.mjs",
-    "test:unit": "node --test src/tz.test.mjs src/tokenCrypto.test.mjs src/ghlWebhook.test.mjs src/ghlOAuth.test.mjs"
+    "test:unit": "node --test src/tz.test.mjs src/tokenCrypto.test.mjs src/ghlWebhook.test.mjs src/ghlOAuth.test.mjs src/activity.test.mjs"
   },
   "engines": {
     "node": ">=20"

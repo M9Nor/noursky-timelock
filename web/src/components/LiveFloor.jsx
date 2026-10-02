@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import KpiRow from "./KpiRow.jsx";
-import { formatDuration, serverOffset, nowWithOffset } from "../time.js";
+import { formatDuration, formatIdle, serverOffset, nowWithOffset } from "../time.js";
 
 const initials = (n) => (n || "؟").trim().charAt(0);
 
@@ -25,6 +25,9 @@ export default function LiveFloor({ api }) {
   const nowS = nowWithOffset(offsetRef.current);
   const fb = data.fixed_break;
   const inFixed = Boolean(fb && nowS >= fb.starts_at && nowS < fb.ends_at);
+  // idle_sec is exact at server_time; it keeps growing between polls unless on a break.
+  const idleNow = (p) => (p.idle_sec == null ? null : p.idle_sec + (p.break_started_at || inFixed ? 0 : Math.max(0, nowS - data.server_time)));
+  const isIdle = (p) => data.idle_minutes != null && idleNow(p) != null && idleNow(p) >= data.idle_minutes * 60;
   const working = data.employees.filter((e) => e.session_id != null);
   const offline = data.employees.filter((e) => e.session_id == null);
   const lane = (label, people, live) => (
@@ -40,6 +43,10 @@ export default function LiveFloor({ api }) {
               : inFixed
                 ? <div className="m break">وقت الاستراحة</div>
                 : <div className="m">{formatDuration(nowS - p.started_at)}</div>)}
+            {live && !p.break_started_at && !inFixed && isIdle(p) && (
+              <div className="m warn">بدون نشاط {formatIdle(idleNow(p))}</div>
+            )}
+            {!live && p.active_without_session && <div className="m warn">نشِط بدون دوام</div>}
           </div>
         </div>
       )) : <div className="hint" style={{ textAlign: "center", padding: "12px 0" }}>لا أحد</div>}

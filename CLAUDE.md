@@ -29,6 +29,7 @@ src/tz.js                # timezone math: per-date offsets (DST-safe), local-day
 src/ghlWebhook.js        # GHL webhook Ed25519 signature check + payload -> metadata (never content), appId/dedupe rules
 src/ghlOAuth.js          # GHL Marketplace OAuth code exchange (timeout, unreachable vs refused)
 src/tokenCrypto.js       # AES-256-GCM encryption of stored OAuth tokens (TOKEN_ENC_KEY)
+src/activity.js          # activity rules: working hours, event freshness, idle time, session summary (pure)
 schema.sql               # DB schema (8 tables) — run once via phpMyAdmin import
 migrations/              # numbered upgrade scripts for existing DBs (see migrations/README.md)
 scripts/smoke-test.mjs   # end-to-end backend smoke test (simulates GHL SSO)
@@ -42,7 +43,7 @@ web/                     # React + Vite SPA (source of the UI)
   src/styles.css         # NourSky design system (light theme, class-based)
   src/components/        # Icon, Button, Toast, TopBar, EmployeeScreen, KpiRow, LiveFloor,
                          #   ReportPanel, SessionEditModal, SettingsPanel, ManagerDashboard,
-                         #   StopNoteDialog, MyHistory
+                         #   StopNoteDialog, MyHistory, AlertsPanel
 public/                  # Vite build output (gitignored; produced at deploy)
 docs/                    # PROGRESS.md, DECISIONS.md, specs/, plans/, design-reference.html
 archive/cloudflare-worker/  # reference only — never edit or deploy
@@ -66,7 +67,7 @@ npm run build
 # Frontend unit tests (no DB needed — API is mocked)
 cd web && npx vitest run
 
-# Backend unit tests (timezone math, webhook signature/parsing, OAuth exchange, token crypto; no DB needed)
+# Backend unit tests (timezone math, webhook signature/parsing, OAuth exchange, token crypto, activity rules; no DB needed)
 npm run test:unit
 
 # Backend smoke test (needs a running server + DB)
