@@ -234,6 +234,9 @@ dialog::backdrop{background:rgba(20,20,37,.5)}
 .field .err{font-size:13px; color:var(--neg); min-height:0}
 .field.check label{display:flex; align-items:center; gap:10px; cursor:pointer}
 .field.check input{min-height:0; width:18px; height:18px; padding:0; accent-color:var(--accent)}
+.field.days{display:flex; flex-wrap:wrap; gap:8px 14px; border:0; padding:0; margin:0 0 12px}
+.field.days legend{width:100%; margin-bottom:6px; font-weight:600}
+.field.days label{display:flex; align-items:center; gap:6px; font-weight:400}
 .field [aria-invalid="true"]{border-color:var(--neg)}
 .row2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
 .dlg-a{display:flex; gap:10px; justify-content:flex-start; margin-top:6px}

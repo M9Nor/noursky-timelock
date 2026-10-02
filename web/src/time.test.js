@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration, formatHours, serverOffset, formatClock, formatLateness, formatStamp, formatBreak, liveTotals } from "./time.js";
+import { formatDuration, formatHours, serverOffset, formatClock, formatLateness, formatStamp, formatBreak, liveTotals, formatTime, formatIdle } from "./time.js";
 
 describe("time helpers", () => {
   it("formats duration as H:MM:SS with Western digits", () => {
@@ -116,5 +116,26 @@ describe("liveTotals", () => {
   it("is all zeros with no open session", () => {
     expect(liveTotals({ open_session: null, open_break: null, worked_sec: 120, server_time: t, fixed_break: null }, t + 50))
       .toMatchObject({ sessionSec: 0, todaySec: 120, inFixed: false });
+  });
+});
+
+describe("formatTime", () => {
+  it("shows the wall-clock time in the given zone", () => {
+    const ts = Date.UTC(2026, 9, 5, 5, 5) / 1000; // 05:05Z
+    expect(formatTime(ts, "Asia/Dubai")).toBe("09:05");
+    expect(formatTime(ts, "UTC")).toBe("05:05");
+  });
+  it("shows a dash without a timestamp", () => {
+    expect(formatTime(null, "UTC")).toBe("—");
+  });
+});
+
+describe("formatIdle", () => {
+  it("formats minutes and hours, and a dash for no value", () => {
+    expect(formatIdle(null)).toBe("—");
+    expect(formatIdle(0)).toBe("0 د");
+    expect(formatIdle(45 * 60 + 20)).toBe("45 د");
+    expect(formatIdle(65 * 60)).toBe("1 س 5 د");
+    expect(formatIdle(120 * 60)).toBe("2 س");
   });
 });

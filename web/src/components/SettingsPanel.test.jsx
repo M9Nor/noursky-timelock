@@ -161,4 +161,49 @@ describe("SettingsPanel", () => {
     await waitFor(() => expect(status.textContent).toContain("تعذّر فحص حالة الربط مع GHL"));
     expect(screen.queryByText("حدث خطأ، حاول مرة أخرى")).not.toBeInTheDocument();
   });
+
+  const WH = { ...BASE, work_end: "17:00", work_days: 127, activity_monitoring: true, idle_minutes: 30 };
+
+  it("shows the working-day end and the seven work-day boxes", async () => {
+    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? WH : { installed: false })), put: vi.fn() };
+    wrap(<SettingsPanel api={api} />);
+    expect(await screen.findByLabelText("نهاية الدوام (HH:MM)")).toHaveValue("17:00");
+    for (const d of ["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"]) {
+      expect(screen.getByLabelText(d)).toBeChecked();
+    }
+  });
+
+  it("sends work_end and the work-day bitmask (Friday off = 95)", async () => {
+    const api = {
+      get: vi.fn(async (p) => (p === "/admin/settings" ? WH : { installed: false })),
+      put: vi.fn(async (_p, b) => ({ ...WH, ...b })),
+    };
+    wrap(<SettingsPanel api={api} />);
+    fireEvent.click(await screen.findByLabelText("الجمعة"));
+    fireEvent.change(screen.getByLabelText("نهاية الدوام (HH:MM)"), { target: { value: "16:30" } });
+    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(api.put.mock.calls[0][1]).toMatchObject({ work_end: "16:30", work_days: 95 });
+  });
+
+  it("hints that working hours are needed while monitoring is on without an end", async () => {
+    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? { ...WH, work_end: null } : { installed: false })), put: vi.fn() };
+    wrap(<SettingsPanel api={api} />);
+    expect(await screen.findByText("حدّد بداية ونهاية الدوام لتشتغل تنبيهات العمل بدون دوام")).toBeInTheDocument();
+  });
+
+  it("counts active GHL users who never opened TimeClock", async () => {
+    const conn = { installed: true, has_activity_scope: true, last_event_at: null, events_24h: 3, unknown_active_users: 2 };
+    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? WH : conn)), put: vi.fn() };
+    wrap(<SettingsPanel api={api} />);
+    expect(await screen.findByText("في نشاط بآخر 7 أيام من 2 مستخدمين ما فتحوا TimeClock بعد")).toBeInTheDocument();
+  });
+
+  it("explains an invalid working-day end", async () => {
+    const err = Object.assign(new Error("INVALID_WORK_END"), { code: "INVALID_WORK_END" });
+    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? WH : { installed: false })), put: vi.fn(async () => { throw err; }) };
+    wrap(<SettingsPanel api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
+    expect(await screen.findByText("نهاية الدوام غير صحيحة (لازم تكون بعد البداية)")).toBeInTheDocument();
+  });
 });
