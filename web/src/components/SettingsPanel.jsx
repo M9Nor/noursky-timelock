@@ -65,7 +65,7 @@ export default function SettingsPanel({ api }) {
         : e.code === "INVALID_BREAKS" ? "إعداد الاستراحات غير صحيح"
         : e.code === "INVALID_BREAK_MODE" ? "نوع الاستراحة غير صحيح"
         : e.code === "INVALID_BREAK_WINDOW" ? "وقت الاستراحة غير صحيح (البداية لازم تكون قبل النهاية)"
-        : e.code === "INVALID_IDLE_MINUTES" ? "حد الخمول لازم يكون بين 10 و240 دقيقة"
+        : e.code === "INVALID_IDLE_MINUTES" ? "حد الخمول لازم يكون بين 1 و240 دقيقة"
         : e.code === "INVALID_ACTIVITY_MONITORING" ? "إعداد مراقبة النشاط غير صحيح"
         : e.code === "INVALID_NOTE_POLICY" ? "إعداد الملاحظة غير صحيح"
         : "حدث خطأ، حاول مرة أخرى");
@@ -127,7 +127,7 @@ export default function SettingsPanel({ api }) {
       {s.activity_monitoring && (
         <div className="field">
           <label htmlFor="idle-minutes">حد الخمول (دقائق)</label>
-          <input id="idle-minutes" type="number" step="1" min="10" max="240" value={s.idle_minutes ?? 30} onChange={set("idle_minutes")} />
+          <input id="idle-minutes" type="number" step="1" min="1" max="240" value={s.idle_minutes ?? 30} onChange={set("idle_minutes")} />
         </div>
       )}
       <div className="field">

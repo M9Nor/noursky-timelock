@@ -130,7 +130,22 @@ describe("SettingsPanel", () => {
     const put = vi.fn(async () => { throw Object.assign(new Error("x"), { code: "INVALID_IDLE_MINUTES" }); });
     wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true, idle_minutes: 5 }, { installed: true, has_activity_scope: true, last_event_at: null, events_24h: 0 }, put)} />);
     fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
-    expect(await screen.findByText("حد الخمول لازم يكون بين 10 و240 دقيقة")).toBeInTheDocument();
+    expect(await screen.findByText("حد الخمول لازم يكون بين 1 و240 دقيقة")).toBeInTheDocument();
+  });
+
+  it("accepts a one-minute idle threshold and explains the 1–240 range", async () => {
+    const err = Object.assign(new Error("INVALID_IDLE_MINUTES"), { code: "INVALID_IDLE_MINUTES" });
+    const api = {
+      get: vi.fn(async (p) => (p === "/admin/settings" ? { ...BASE, activity_monitoring: true, idle_minutes: 30 } : { installed: false })),
+      put: vi.fn(async () => { throw err; }),
+    };
+    wrap(<SettingsPanel api={api} />);
+    const idle = await screen.findByLabelText("حد الخمول (دقائق)");
+    expect(idle).toHaveAttribute("min", "1");
+    fireEvent.change(idle, { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(api.put.mock.calls[0][1].idle_minutes).toBe(1));
+    expect(await screen.findByText("حد الخمول لازم يكون بين 1 و240 دقيقة")).toBeInTheDocument();
   });
 
   it("shows not connected after an uninstall even though an old event time remains", async () => {
