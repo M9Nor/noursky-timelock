@@ -26,6 +26,8 @@ export default function EmployeeScreen({ api, user }) {
   const [askNote, setAskNote] = useState(false);
   const [alerts, setAlerts] = useState({ list: [], timezone: null });
   const [alertNote, setAlertNote] = useState("");
+  const [alertNoteError, setAlertNoteError] = useState("");
+  const [sendingNote, setSendingNote] = useState(false);
   const offsetRef = useRef(0);
   const toast = useToast();
 
@@ -134,13 +136,17 @@ export default function EmployeeScreen({ api, user }) {
 
   async function sendAlertNote(id) {
     const note = alertNote.trim();
-    if (!note) return;
+    if (!note || sendingNote) return;
+    setAlertNoteError("");
+    setSendingNote(true);
     try {
       await api.post(`/me/alerts/${id}/note`, { note });
       setAlertNote("");
       toast("وصلت ملاحظتك للمدير");
     } catch (e) {
-      setError(e.code === "NOTE_TOO_LONG" ? "الملاحظة طويلة جداً" : GENERIC_ERROR);
+      setAlertNoteError(e.code === "NOTE_TOO_LONG" ? "الملاحظة طويلة جداً" : GENERIC_ERROR);
+    } finally {
+      setSendingNote(false);
     }
   }
 
@@ -208,8 +214,9 @@ export default function EmployeeScreen({ api, user }) {
           <div className="field">
             <label htmlFor="alert-note">ملاحظة للمدير</label>
             <textarea id="alert-note" maxLength={300} value={alertNote} onChange={(e) => setAlertNote(e.target.value)} />
+            {alertNoteError && <span className="err">{alertNoteError}</span>}
           </div>
-          <Button variant="ghost" size="sm" onClick={() => sendAlertNote(nci.id)}>إرسال الملاحظة</Button>
+          <Button variant="ghost" size="sm" disabled={!alertNote.trim() || sendingNote} onClick={() => sendAlertNote(nci.id)}>إرسال الملاحظة</Button>
         </section>
       )}
 

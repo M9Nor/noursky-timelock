@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { ToastProvider } from "./ToastContext.jsx";
 import EmployeeScreen from "./EmployeeScreen.jsx";
 
@@ -62,8 +62,50 @@ describe("EmployeeScreen", () => {
   it("still works when the alerts request fails", async () => {
     const api = withAlerts(makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() }), new Error("down"));
     wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    // The alerts request ran and its rejection has been handled before we assert.
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/me/alerts"));
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/me/settings"));
+    await act(async () => { await Promise.resolve(); });
     expect(await screen.findByRole("button", { name: /بدء الدوام/ })).toBeInTheDocument();
     expect(screen.queryByText("حدث خطأ، حاول مرة أخرى")).not.toBeInTheDocument();
+  });
+
+  it("starts the day from the banner's own button", async () => {
+    const at = Date.UTC(2026, 9, 5, 5, 5) / 1000;
+    const api = withAlerts(makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() }),
+      { alerts: [{ id: "a1", kind: "working_not_clocked_in", from_at: at }], timezone: "UTC" });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    const banner = (await screen.findByText(/مبيّن إنك عم تشتغل/)).closest("section");
+    expect(screen.getAllByRole("button", { name: /بدء الدوام/ })).toHaveLength(2);
+    fireEvent.click(within(banner).getByRole("button", { name: /بدء الدوام/ }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/session/start"));
+  });
+
+  it("shows no banner while a session is open", async () => {
+    const at = Date.UTC(2026, 9, 5, 5, 5) / 1000;
+    const started = nowSec() - 60;
+    const api = withAlerts(makeApi({ open_session: { id: "s1", started_at: started }, worked_sec: 60, server_time: started + 60 }),
+      { alerts: [{ id: "a1", kind: "working_not_clocked_in", from_at: at }], timezone: "UTC" });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    expect(await screen.findByRole("button", { name: /إنهاء الدوام/ })).toBeInTheDocument();
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/me/alerts"));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByText(/مبيّن إنك عم تشتغل/)).not.toBeInTheDocument();
+  });
+
+  it("shows a too-long note error next to the note box", async () => {
+    const at = Date.UTC(2026, 9, 5, 5, 5) / 1000;
+    const post = vi.fn(async () => { throw { code: "NOTE_TOO_LONG" }; });
+    const api = withAlerts(makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() }, DEFAULT_SETTINGS, null, post),
+      { alerts: [{ id: "a1", kind: "working_not_clocked_in", from_at: at }], timezone: "UTC" });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    const banner = (await screen.findByText(/مبيّن إنك عم تشتغل/)).closest("section");
+    const send = within(banner).getByRole("button", { name: "إرسال الملاحظة" });
+    expect(send).toBeDisabled();
+    fireEvent.change(within(banner).getByLabelText("ملاحظة للمدير"), { target: { value: "ملاحظة" } });
+    fireEvent.click(send);
+    expect(await within(banner).findByText("الملاحظة طويلة جداً")).toBeInTheDocument();
+    await waitFor(() => expect(send).not.toBeDisabled());
   });
 
   it("shows start button when no open session", async () => {
