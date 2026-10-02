@@ -284,7 +284,7 @@ async function autoCloseStale(loc = null) {
         AND (:loc IS NULL OR b.location_id = :loc)`,
     { loc }
   );
-  await summarizeClosedSessions(loc);
+  await summarizeClosedSessions(loc).catch((e) => console.error("[activity-summary]", e));
 }
 
 /** Break intervals of one session as [start, end|null], plus its fixed windows (paid ones too). */
@@ -319,29 +319,37 @@ async function summarizeClosedSessions(loc = null) {
     : (await q("SELECT location_id FROM settings WHERE activity_monitoring = 1")).map((r) => r.location_id);
   const t = now();
   for (const l of locs) {
-    const st = await getSettings(l);
-    if (!st?.activity_monitoring || st.activity_monitoring_since == null) continue;
-    const since = Number(st.activity_monitoring_since);
-    const rows = await q(
-      `SELECT id, user_id, started_at, ended_at FROM sessions
-        WHERE location_id = :loc AND ended_at IS NOT NULL AND activity_count IS NULL
-          AND ended_at > :since AND ended_at > :recent
-        LIMIT 50`,
-      { loc: l, since, recent: t - 7 * 86400 }
-    );
-    for (const s of rows) {
-      const start = Number(s.started_at), end = Number(s.ended_at);
-      const sum = sessionSummary({
-        startedAt: start, endedAt: end, monitoringSince: since,
-        eventTimes: await eventTimes(l, s.user_id, start, end),
-        breaks: await sessionBreaks(s, st, end),
-      });
-      if (!sum) continue;
-      await q(
-        `UPDATE sessions SET activity_count = :n, last_activity_at = :last, longest_idle_sec = :idle
-          WHERE id = :id AND activity_count IS NULL`,
-        { n: sum.activity_count, last: sum.last_activity_at, idle: sum.longest_idle_sec, id: s.id }
+    try {
+      const st = await getSettings(l);
+      if (!st?.activity_monitoring || st.activity_monitoring_since == null) continue;
+      const since = Number(st.activity_monitoring_since);
+      // Sessions are <= max_session_hours (<= 24 h) unless a manager edit stretched them, so
+      // 9 days of start times covers every session that ended in the last 7.
+      const rows = await q(
+        `SELECT id, user_id, started_at, ended_at FROM sessions
+          WHERE location_id = :loc AND started_at >= :scanFrom AND ended_at IS NOT NULL
+            AND activity_count IS NULL AND ended_at > :since AND ended_at > :recent
+          LIMIT 50`,
+        { loc: l, since, recent: t - 7 * 86400, scanFrom: t - 9 * 86400 }
       );
+      for (const s of rows) {
+        const start = Number(s.started_at), end = Number(s.ended_at);
+        const sum = sessionSummary({
+          startedAt: start, endedAt: end, monitoringSince: since,
+          eventTimes: await eventTimes(l, s.user_id, start, end),
+          breaks: await sessionBreaks(s, st, end),
+        });
+        if (!sum) continue;
+        // Only if the row still has the bounds read above: a concurrent manager edit nulls the
+        // summary and changes them, and must not be overwritten with a summary of the old bounds.
+        await q(
+          `UPDATE sessions SET activity_count = :n, last_activity_at = :last, longest_idle_sec = :idle
+            WHERE id = :id AND activity_count IS NULL AND started_at = :s AND ended_at = :e`,
+          { n: sum.activity_count, last: sum.last_activity_at, idle: sum.longest_idle_sec, id: s.id, s: start, e: end }
+        );
+      }
+    } catch (e) {
+      console.error("[activity-summary]", l, e);
     }
   }
 }
@@ -362,8 +370,11 @@ async function liveActivity(loc, st, employees, t) {
     { loc }
   );
   for (const r of nci) if (out.has(r.user_id)) out.get(r.user_id).active_without_session = true;
-  const [fresh] = await q("SELECT MAX(occurred_at) AS at FROM activity_events WHERE location_id = :loc", { loc });
-  if (fresh?.at == null || Number(fresh.at) <= t - 86400) return out;
+  const [fresh] = await q(
+    "SELECT 1 AS ok FROM activity_events WHERE location_id = :loc AND occurred_at > :cutoff LIMIT 1",
+    { loc, cutoff: t - 86400 }
+  );
+  if (!fresh) return out;
   for (const e of employees) {
     if (!e.session_id) continue;
     const start = Number(e.started_at);
@@ -705,7 +716,7 @@ app.post("/session/stop", authed, async (c) => {
       { id: s.id, t, st: s.started_at }
     );
     await conn.commit();
-    await summarizeClosedSessions(loc);
+    await summarizeClosedSessions(loc).catch((e) => console.error("[activity-summary]", e));
     return c.json({
       id: s.id, started_at: s.started_at, ended_at: t,
       duration_sec: t - s.started_at, break_sec: Number(brk.break_sec), note,
@@ -951,7 +962,7 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
       }
     );
     await conn.commit();
-    await summarizeClosedSessions(loc);
+    await summarizeClosedSessions(loc).catch((e) => console.error("[activity-summary]", e));
     return c.json({ id, started_at: s, ended_at: e, duration_sec: e - s, closed_by: "admin" });
   } catch (err) {
     await conn.rollback().catch(() => {});
