@@ -36,4 +36,4 @@ When adding a column: add it to `schema.sql` **and** add the next numbered file 
 | `002_breaks_and_notes.sql` | 2026-09-27 | run manually in phpMyAdmin before phase 2 deploy |
 | `003_break_modes.sql` | 2026-09-28 | run manually in phpMyAdmin before break-modes deploy |
 | `004_activity_monitoring.sql` | 2026-09-30 | run manually in phpMyAdmin before activity monitoring phase A deploy |
-| `005_working_hours.sql` | _pending_ | run manually in phpMyAdmin before activity monitoring phase B deploy |
+| `005_working_hours.sql` | 2026-10-02 | run manually in phpMyAdmin before activity monitoring phase B deploy |
