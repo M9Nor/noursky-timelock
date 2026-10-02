@@ -12,6 +12,7 @@ import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID }
 import { localZone, localDate, wallToUtc, fixedWindows, localDayBounds } from "./tz.js";
 import { bodyLimit } from "hono/body-limit";
 import { verifyGhlSignature, parseWebhook, testKeyAllowed, isForOurApp, activityDedupeKey } from "./ghlWebhook.js";
+import { isWithinWorkHours, isFreshEvent } from "./activity.js";
 import { exchangeCode } from "./ghlOAuth.js";
 import { encryptToken } from "./tokenCrypto.js";
 
@@ -44,6 +45,9 @@ const pool = mysql.createPool({
 pool.on("connection", (conn) => conn.query("SET time_zone = '+00:00'"));
 
 const now = () => Math.floor(Date.now() / 1000);
+// Trimmed: a stray space pasted into hPanel would otherwise reject every install event.
+const GHL_APP_ID = (env.GHL_APP_ID ?? "").trim() || null;
+const numOrNull = (v) => (v == null ? null : Number(v));
 
 class HttpError extends Error {
   constructor(status, code) { super(code); this.status = status; this.code = code; }
@@ -455,6 +459,13 @@ app.post("/session/start", authed, async (c) => {
     if (e.code === "ER_DUP_ENTRY") throw new HttpError(409, "SESSION_ALREADY_OPEN");
     throw e;
   }
+  // Clocking in answers any open "working, not clocked in" alert (spec §5.3).
+  await q(
+    `UPDATE activity_alerts
+        SET status = 'resolved', resolution = 'clocked_in', resolved_by = 'system', resolved_at = :t
+      WHERE location_id = :loc AND user_id = :uid AND kind = 'working_not_clocked_in' AND status = 'open'`,
+    { loc, uid, t }
+  );
   return c.json({ id, started_at: t }, 201);
 });
 
@@ -884,6 +895,35 @@ app.get("/admin/ghl-connection", authed, managerOnly, async (c) => {
   });
 });
 
+const ALERT_STATUSES = ["open", "resolved", "dismissed"];
+const ALERT_COLUMNS = `a.id, a.user_id, a.kind, a.from_at, a.to_at, a.status, a.resolution,
+  a.employee_note, a.employee_note_at, a.detected_at`;
+/** BIGINT columns as plain numbers, so the UI never sees a string timestamp. */
+function alertRow(r) {
+  return {
+    ...r,
+    from_at: Number(r.from_at), to_at: numOrNull(r.to_at), detected_at: Number(r.detected_at),
+    employee_note_at: numOrNull(r.employee_note_at),
+  };
+}
+
+app.get("/admin/alerts", authed, managerOnly, async (c) => {
+  const { loc } = c.get("claims");
+  const status = c.req.query("status") ?? "open";
+  if (!ALERT_STATUSES.includes(status)) throw new HttpError(400, "INVALID_STATUS");
+  const alerts = (await q(
+    `SELECT ${ALERT_COLUMNS}, e.name
+       FROM activity_alerts a
+       LEFT JOIN employees e ON e.user_id = a.user_id AND e.location_id = a.location_id
+      WHERE a.location_id = :loc AND a.status = :status
+      ORDER BY a.from_at DESC
+      LIMIT 200`,
+    { loc, status }
+  )).map(alertRow);
+  const st = await getSettings(loc);
+  return c.json({ alerts, timezone: st?.timezone ?? "Asia/Riyadh", server_time: now() });
+});
+
 app.put("/admin/settings", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
   // Windows that already began under the CURRENT policy are recorded before it changes;
@@ -1009,6 +1049,39 @@ const webhookBodyLimit = bodyLimit({
 // One log line per minute at most, so a flood of bad signatures cannot flood the log.
 let lastBadSignatureLogAt = 0;
 
+// Logged once per process: an install event for another app is normal (GHL signs every
+// app's events with one key), but a first mismatch is worth seeing in case GHL_APP_ID is wrong.
+let loggedForeignAppId = false;
+
+/**
+ * Opens a "working, not clocked in" alert for one stored event when every rule of spec §5.3
+ * holds: fresh event, inside working hours, an employee (not a manager) we know, and no
+ * session open or covering the event. ux_alert_nci_open keeps one open alert per employee,
+ * so a burst of events — or two concurrent deliveries — opens exactly one (INSERT IGNORE).
+ */
+async function openNotClockedInAlert(st, loc, uid, at, t) {
+  if (!isFreshEvent(at, t) || !isWithinWorkHours(st, at)) return;
+  const [emp] = await q(
+    `SELECT 1 AS ok FROM employees
+      WHERE location_id = :loc AND user_id = :uid AND role = 'employee' AND is_active = 1`,
+    { loc, uid }
+  );
+  if (!emp) return;
+  const [busy] = await q(
+    `SELECT 1 AS ok FROM sessions
+      WHERE location_id = :loc AND user_id = :uid
+        AND (ended_at IS NULL OR (started_at <= :at AND ended_at > :at))
+      LIMIT 1`,
+    { loc, uid, at }
+  );
+  if (busy) return;
+  await q(
+    `INSERT IGNORE INTO activity_alerts (id, location_id, user_id, session_id, kind, from_at, detected_at, status)
+     VALUES (:id, :loc, :uid, NULL, 'working_not_clocked_in', :at, :t, 'open')`,
+    { id: randomUUID(), loc, uid, at, t }
+  );
+}
+
 // GHL refuses any URL in the app settings that mentions HighLevel ("ghl"), so the public
 // paths are neutral: /webhooks/events and /oauth/callback.
 app.post("/webhooks/events", webhookBodyLimit, async (c) => {
@@ -1034,7 +1107,13 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
 
   if (ev.event === "install" || ev.event === "uninstall") {
     // GHL signs all apps' events with one key: ignore (but acknowledge) another app's.
-    if (!isForOurApp(ev, env.GHL_APP_ID)) return c.json({ ok: true });
+    if (!isForOurApp(ev, GHL_APP_ID)) {
+      if (!loggedForeignAppId) {
+        loggedForeignAppId = true;
+        console.warn("[webhook] install/uninstall for another app ignored", { appId: ev.appId ?? null });
+      }
+      return c.json({ ok: true });
+    }
     const installed = ev.event === "install";
     await q(
       `INSERT INTO ghl_installs (location_id, company_id, installed_at, uninstalled_at, last_event_at, updated_at)
@@ -1056,7 +1135,7 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
   );
 
   if (ev.event === "activity") {
-    const [st] = await q("SELECT activity_monitoring FROM settings WHERE location_id = :loc", { loc: ev.locationId });
+    const st = await getSettings(ev.locationId);
     if (st?.activity_monitoring) {
       // GHL retries a failed delivery up to 12 times, and the same message can arrive again
       // through another app with a new webhookId: the key prefers the message id.
@@ -1072,6 +1151,8 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
           webhookId, t,
         }
       );
+      // Only an event with a user id is a person's activity (spec §2.1).
+      if (ev.userId) await openNotClockedInAlert(st, ev.locationId, String(ev.userId), ev.occurredAt, t);
     }
   }
   return c.json({ ok: true });

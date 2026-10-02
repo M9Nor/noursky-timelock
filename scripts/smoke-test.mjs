@@ -860,6 +860,94 @@ if (!awAcceptsTestKey) {
     (await call(AWM, "GET", "/admin/ghl-connection")).body?.installed === false);
 }
 
+// --- Not-clocked-in alert (activity phase B, spec §5.3). Own location, UTC, needs the test key.
+const NCLOC = `${LOC}-nc`;
+const ncMgr = await sso({ userId: `${NCLOC}-m1`, role: "admin", type: "account", activeLocation: NCLOC, userName: "مدير التنبيهات", email: "ncm@x.com" });
+const ncE1 = await sso({ userId: `${NCLOC}-u1`, role: "user", type: "account", activeLocation: NCLOC, userName: "موظف أول", email: "nc1@x.com" });
+const ncE2 = await sso({ userId: `${NCLOC}-u2`, role: "user", type: "account", activeLocation: NCLOC, userName: "موظف تاني", email: "nc2@x.com" });
+const NCM = ncMgr.body?.token, NC1 = ncE1.body?.token, NC2 = ncE2.body?.token;
+const ncNow = Math.floor(Date.now() / 1000);
+const ncTod = ncNow % 86400;
+let ncSeq = 0;
+const ncEvent = (userId, at = Math.floor(Date.now() / 1000)) => {
+  ncSeq++;
+  const p = { type: "OutboundMessage", locationId: NCLOC, messageType: "SMS", source: "app",
+    dateAdded: new Date(at * 1000).toISOString(), webhookId: `${NCLOC}-w${ncSeq}`, messageId: `${NCLOC}-m${ncSeq}` };
+  if (userId) p.userId = userId;
+  return ghlWebhook(p);
+};
+const ncOpen = async () => (await call(NCM, "GET", "/admin/alerts?status=open")).body?.alerts ?? [];
+const ncOpenFor = async (uid) => (await ncOpen()).filter((a) => a.user_id === uid);
+const ncHours = (extra) => call(NCM, "PUT", "/admin/settings",
+  { timezone: "UTC", work_start: "00:00", work_end: "23:59", work_days: 127, activity_monitoring: true, ...extra });
+
+if (!awAcceptsTestKey) {
+  console.log("  SKIP  not-clocked-in alert checks (target refuses the test signing key)");
+} else if (ncTod < 120 || ncTod > 86400 - 180) {
+  console.log("  SKIP  not-clocked-in alert checks (too close to UTC midnight)");
+} else {
+  await ncHours({});
+  check("an employee's event inside working hours opens one not-clocked-in alert",
+    (await ncEvent(`${NCLOC}-u1`)).status === 200 && (await ncOpenFor(`${NCLOC}-u1`)).length === 1);
+  const ncA = (await ncOpenFor(`${NCLOC}-u1`))[0];
+  check("the alert carries the kind, the employee's name and the event time",
+    ncA?.kind === "working_not_clocked_in" && ncA?.name === "موظف أول" && Math.abs(Number(ncA?.from_at) - ncNow) <= 10,
+    `(${JSON.stringify(ncA)})`);
+  await ncEvent(`${NCLOC}-u1`);
+  check("a second event keeps a single open alert", (await ncOpenFor(`${NCLOC}-u1`)).length === 1);
+
+  await ncEvent(null);
+  check("an event without a user id opens nothing", (await ncOpen()).length === 1);
+  await ncEvent(`${NCLOC}-m1`);
+  check("a manager's event opens nothing", (await ncOpenFor(`${NCLOC}-m1`)).length === 0);
+  await ncEvent(`${NCLOC}-stranger`);
+  check("a user who never opened TimeClock opens nothing", (await ncOpenFor(`${NCLOC}-stranger`)).length === 0);
+  await ncEvent(`${NCLOC}-u2`, ncNow - 7 * 3600);
+  check("an event older than 6 hours opens nothing", (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
+
+  await call(NC2, "POST", "/session/start");
+  await ncEvent(`${NCLOC}-u2`);
+  check("an employee with an open session gets no alert", (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
+  await call(NC2, "POST", "/session/stop");
+  const ncS2 = (await call(NCM, "GET", `/admin/sessions?from=${ncNow - 86400}&to=${ncNow + 60}&user_id=${NCLOC}-u2`)).body?.sessions?.[0];
+  const ncPinned = ncS2 && (await call(NCM, "PATCH", `/admin/sessions/${ncS2.id}`,
+    { started_at: ncNow - 3600, ended_at: ncNow - 1800, reason: "تثبيت وقت للاختبار" })).status === 200;
+  await ncEvent(`${NCLOC}-u2`, ncNow - 2700);
+  check("an event inside a session that covers its time opens nothing",
+    ncPinned && (await ncOpenFor(`${NCLOC}-u2`)).length === 0, `(pinned ${ncPinned})`);
+
+  // A one-hour window twelve hours away from now cannot contain now.
+  const ncFarH = String((Math.floor(ncTod / 3600) + 12) % 24).padStart(2, "0");
+  await ncHours({ work_start: `${ncFarH}:00`, work_end: `${ncFarH}:59` });
+  await ncEvent(`${NCLOC}-u2`);
+  check("an event outside working hours opens nothing", (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
+  await ncHours({ work_days: 127 & ~(1 << new Date().getUTCDay()) });
+  await ncEvent(`${NCLOC}-u2`);
+  check("an event on a day off opens nothing", (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
+  await ncHours({ work_end: null });
+  await ncEvent(`${NCLOC}-u2`);
+  check("without a work_end nothing opens", (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
+  await ncHours({});
+  await ncEvent(`${NCLOC}-u2`);
+  check("the same employee inside working hours does get an alert (the checks above are not vacuous)",
+    (await ncOpenFor(`${NCLOC}-u2`)).length === 1);
+
+  check("an employee cannot list alerts", (await call(NC1, "GET", "/admin/alerts")).status === 403);
+  check("an unknown status → 400", (await call(NCM, "GET", "/admin/alerts?status=maybe")).body?.error === "INVALID_STATUS");
+  const ncList = await call(NCM, "GET", "/admin/alerts");
+  check("the alert list reports the location timezone and server time",
+    ncList.body?.timezone === "UTC" && Number.isInteger(ncList.body?.server_time));
+
+  await call(NC1, "POST", "/session/start");
+  check("clocking in resolves the employee's alert", (await ncOpenFor(`${NCLOC}-u1`)).length === 0);
+  const ncResolved = ((await call(NCM, "GET", "/admin/alerts?status=resolved")).body?.alerts ?? [])
+    .find((a) => a.user_id === `${NCLOC}-u1`);
+  check("the resolved alert says it was resolved by clocking in",
+    ncResolved?.status === "resolved" && ncResolved?.resolution === "clocked_in", `(${JSON.stringify(ncResolved)})`);
+  await call(NC1, "POST", "/session/stop");
+}
+await cleanupLocation(NCLOC);
+
 const awBig = await ghlWebhook({ type: "OutboundMessage", locationId: AWLOC, pad: "x".repeat(300 * 1024) }, { sign: false });
 check("a webhook over 256 KB → 413 PAYLOAD_TOO_LARGE",
   awBig.status === 413 && awBig.body?.error === "PAYLOAD_TOO_LARGE", `(${awBig.status} ${JSON.stringify(awBig.body)})`);
