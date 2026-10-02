@@ -29,7 +29,7 @@ src/tz.js                # timezone math: per-date offsets (DST-safe), local-day
 src/ghlWebhook.js        # GHL webhook Ed25519 signature check + payload -> metadata (never content), appId/dedupe rules
 src/ghlOAuth.js          # GHL Marketplace OAuth code exchange (timeout, unreachable vs refused)
 src/tokenCrypto.js       # AES-256-GCM encryption of stored OAuth tokens (TOKEN_ENC_KEY)
-src/activity.js          # activity rules: working hours, event freshness, idle time, session summary (pure)
+src/activity.js          # activity rules: working hours, event freshness, idle time, session summary, idle-alert rules (pure)
 schema.sql               # DB schema (8 tables) — run once via phpMyAdmin import
 migrations/              # numbered upgrade scripts for existing DBs (see migrations/README.md)
 scripts/smoke-test.mjs   # end-to-end backend smoke test (simulates GHL SSO)
@@ -40,7 +40,7 @@ web/                     # React + Vite SPA (source of the UI)
   src/api.js             # fetch wrapper: bearer token, ApiError, api.download (authed CSV)
   src/auth.js            # GHL postMessage SSO handshake + dev-login
   src/time.js            # server-time offset + duration/clock formatting (Western digits)
-  src/alertTitle.js       # ⚠️ tab-title hook while an alert is shown
+  src/alertTitle.js      # ⚠️ tab-title hook while an alert is shown
   src/styles.css         # NourSky design system (light theme, class-based)
   src/components/        # Icon, Button, Toast, TopBar, EmployeeScreen, KpiRow, LiveFloor,
                          #   ReportPanel, SessionEditModal, SettingsPanel, ManagerDashboard,

@@ -424,11 +424,12 @@ async function liveActivity(loc, st, employees, t) {
 /**
  * Phase C (spec §12.1): opens an idle alert for every open session at a monitored location
  * whose quiet stretch (breaks removed) reached idle_minutes. Runs on a 60 s timer and lazily
- * before the alert and live reads. ux_alert_idle_open keeps one ongoing alert per session; a
- * stretch already alerted (same session and from_at) is never alerted again, even after a
- * dismiss. Outage guard: no alert unless the location received an event in the last 24 h.
+ * before the alert and live reads (the employee's own poll passes `uid` and scans only that
+ * employee's session). ux_alert_idle_open keeps one ongoing alert per session; a stretch
+ * already alerted (same session and from_at) is never alerted again, even after a dismiss.
+ * Outage guard: no alert unless the location received an event in the last 24 h.
  */
-async function detectIdle(loc = null) {
+async function detectIdle(loc = null, uid = null) {
   const locs = loc
     ? [loc]
     : (await q("SELECT location_id FROM settings WHERE activity_monitoring = 1")).map((r) => r.location_id);
@@ -443,8 +444,9 @@ async function detectIdle(loc = null) {
       );
       if (!fresh) continue;
       const open = await q(
-        "SELECT id, user_id, started_at FROM sessions WHERE location_id = :loc AND ended_at IS NULL",
-        { loc: l }
+        `SELECT id, user_id, started_at FROM sessions
+          WHERE location_id = :loc AND ended_at IS NULL AND (:uid IS NULL OR user_id = :uid)`,
+        { loc: l, uid }
       );
       for (const s of open) {
         const start = Number(s.started_at);
@@ -459,11 +461,21 @@ async function detectIdle(loc = null) {
           { sid: s.id, fromAt }
         );
         if (seen) continue;
-        await q(
+        const ins = await q(
           `INSERT IGNORE INTO activity_alerts (id, location_id, user_id, session_id, kind, from_at, detected_at, status)
            VALUES (:id, :loc, :uid, :sid, 'idle', :fromAt, :t, 'open')`,
           { id: randomUUID(), loc: l, uid: s.user_id, sid: s.id, fromAt, t }
         );
+        // Race with the webhook: an event stored after lastEventAt was read but before this row
+        // existed found no stretch to end. Look again now that the alert is visible.
+        if (ins.affectedRows > 0) {
+          const [after] = await q(
+            `SELECT MIN(occurred_at) AS at FROM activity_events
+              WHERE location_id = :loc AND user_id = :uid AND occurred_at > :fromAt`,
+            { loc: l, uid: s.user_id, fromAt }
+          );
+          if (after?.at != null) await endIdleStretch(st, l, s.user_id, Number(after.at), t);
+        }
       }
     } catch (e) {
       console.error("[idle-detect]", l, e);
@@ -472,16 +484,19 @@ async function detectIdle(loc = null) {
 }
 
 /**
- * Spec §12.2: a counted event ends this employee's ongoing idle stretch. The alert keeps
- * status open for the manager with to_at = the event time — or, when the stretch never
- * really reached the threshold (a delayed delivery), it is resolved as late activity.
+ * Spec §12.2: a counted event ends this employee's idle stretch. The alert keeps status open
+ * for the manager with to_at = the event time — or, when the stretch never really reached the
+ * threshold (a delayed delivery), it is resolved as late activity. It also covers a stretch
+ * that was already ended by a newer event or by the session end: an event dated inside it
+ * (out-of-order delivery, a delivery after the stop) shortens it the same way. `<` on
+ * from_at: an event in the same second as the start is the same moment, not activity after it.
  */
 async function endIdleStretch(st, loc, uid, at, t) {
   const rows = await q(
     `SELECT a.id, a.from_at, a.session_id, s.started_at
        FROM activity_alerts a JOIN sessions s ON s.id = a.session_id
       WHERE a.location_id = :loc AND a.user_id = :uid AND a.kind = 'idle'
-        AND a.status = 'open' AND a.to_at IS NULL AND a.from_at <= :at`,
+        AND a.status = 'open' AND a.from_at < :at AND (a.to_at IS NULL OR a.to_at > :at)`,
     { loc, uid, at }
   );
   for (const a of rows) {
@@ -490,11 +505,14 @@ async function endIdleStretch(st, loc, uid, at, t) {
       await q(
         `UPDATE activity_alerts
             SET to_at = :at, status = 'resolved', resolution = 'late_activity', resolved_by = 'system', resolved_at = :t
-          WHERE id = :id AND to_at IS NULL`,
+          WHERE id = :id AND status = 'open' AND (to_at IS NULL OR to_at > :at)`,
         { at, t, id: a.id }
       );
     } else {
-      await q("UPDATE activity_alerts SET to_at = :at WHERE id = :id AND to_at IS NULL", { at, id: a.id });
+      await q(
+        "UPDATE activity_alerts SET to_at = :at WHERE id = :id AND status = 'open' AND (to_at IS NULL OR to_at > :at)",
+        { at, id: a.id }
+      );
     }
   }
 }
@@ -677,7 +695,7 @@ const ALERT_NOTE_MAX = 300;
 
 app.get("/me/alerts", authed, async (c) => {
   const { uid, loc } = c.get("claims");
-  await detectIdle(loc).catch((e) => console.error("[idle-detect]", e));
+  await detectIdle(loc, uid).catch((e) => console.error("[idle-detect]", e));
   const alerts = (await q(
     `SELECT ${ALERT_COLUMNS} FROM activity_alerts a
       WHERE a.location_id = :loc AND a.user_id = :uid AND a.status = 'open'
@@ -859,8 +877,8 @@ app.post("/session/stop", authed, async (c) => {
 
 app.get("/admin/live", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
-  await detectIdle(loc).catch((e) => console.error("[idle-detect]", e));
   await autoCloseStale(loc);
+  await detectIdle(loc).catch((e) => console.error("[idle-detect]", e));
   const employees = await q(
     `SELECT e.user_id, e.name, e.email, s.id AS session_id, s.started_at, b.started_at AS break_started_at
        FROM employees e
@@ -1318,6 +1336,15 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
       monitoring: monitoring ? 1 : 0, idleMinutes,
     }
   );
+  // Monitoring switched off: nothing detects or ends an idle stretch any more, so the ongoing
+  // ones end now (they stay open for the manager, like any other ended stretch).
+  if (cur.activity_monitoring && !monitoring) {
+    await q(
+      `UPDATE activity_alerts SET to_at = GREATEST(from_at, :t)
+        WHERE location_id = :loc AND kind = 'idle' AND status = 'open' AND to_at IS NULL`,
+      { t: now(), loc }
+    );
+  }
   return c.json(await getSettings(loc));
 });
 

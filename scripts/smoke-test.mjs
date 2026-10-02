@@ -1151,6 +1151,52 @@ if (!awAcceptsTestKey || icBack.skipped) {
   await call(ICE, "POST", "/session/break/stop");
   check("after the break the idle alert opens", (await icIdle()).some((a) => a.to_at === null));
   await call(ICE, "POST", "/session/stop");
+
+  // Final review I1: an event delivered after the stretch was already ended (session end, or a
+  // newer event) but dated inside it shortens it the same way.
+  const icClear = () => localRows("DELETE FROM activity_events WHERE location_id = :loc AND user_id = :uid",
+    { loc: ICLOC, uid: `${ICLOC}-u1` });
+  await icClear();
+  await call(ICE, "POST", "/session/start");
+  await icBackdate(600);
+  const icE = (await icIdle()).find((a) => a.to_at === null);
+  await call(ICE, "POST", "/session/stop");
+  const icEs = (await icIdle()).find((a) => a.id === icE?.id);
+  check("(precondition) the stopped session's idle alert is open with its end set",
+    icE && icEs?.status === "open" && icEs.to_at != null, `(${JSON.stringify(icEs)})`);
+  await icEvent(`${ICLOC}-u1`, Number(icE?.from_at) + 30);
+  const icEr = (await icIdle("resolved")).find((a) => a.id === icE?.id);
+  check("a late event delivered after the session ended resolves the alert as late activity",
+    icEr?.resolution === "late_activity" && Number(icEr.to_at) === Number(icE?.from_at) + 30, `(${JSON.stringify(icEr)})`);
+
+  await icClear();
+  await call(ICE, "POST", "/session/start");
+  await icBackdate(600);
+  const icF = (await icIdle()).find((a) => a.to_at === null);
+  const icFrom = Number(icF?.from_at);
+  const icFNow = async (status = "open") => (await icIdle(status)).find((a) => a.id === icF?.id);
+  await icEvent(`${ICLOC}-u1`, icFrom + 300);
+  check("(precondition) a newer event ended the stretch at +300 s", Number((await icFNow())?.to_at) === icFrom + 300);
+  await icEvent(`${ICLOC}-u1`, icFrom + 90);
+  const icF2 = await icFNow();
+  check("an out-of-order older event shortens an ended stretch that is still over the threshold",
+    icF2?.status === "open" && Number(icF2.to_at) === icFrom + 90, `(${JSON.stringify(icF2)})`);
+  await icEvent(`${ICLOC}-u1`, icFrom + 30);
+  const icF3 = await icFNow("resolved");
+  check("an out-of-order event that leaves it under the threshold resolves it as late activity",
+    icF3?.resolution === "late_activity" && Number(icF3.to_at) === icFrom + 30, `(${JSON.stringify(icF3)})`);
+
+  // Final review I2 / I3: switching monitoring off ends ongoing idle alerts; the employee's
+  // poll only needs its own sessions.
+  const icOn = (await icIdle()).find((a) => a.to_at === null);
+  check("(precondition) an ongoing idle alert exists before monitoring is switched off", Boolean(icOn),
+    `(${JSON.stringify(await icIdle())})`);
+  check("(precondition) the employee sees it", (await icMine()).some((a) => a.id === icOn?.id));
+  await call(ICM, "PUT", "/admin/settings", { activity_monitoring: false });
+  const icOff = (await call(ICM, "GET", "/admin/alerts?status=open")).body?.alerts?.find((a) => a.id === icOn?.id);
+  check("switching monitoring off ends the ongoing idle alert", icOff && icOff.to_at != null, `(${JSON.stringify(icOff)})`);
+  check("and it leaves the employee's list", !(await icMine()).some((a) => a.id === icOn?.id));
+  await call(ICE, "POST", "/session/stop");
 }
 await cleanupLocation(ICLOC);
 

@@ -388,7 +388,7 @@ and `GET /me/alerts`. For each open session at a location with `activity_monitor
   be working.
 
 ### 12.2 Resume, late event, session end
-- **Resume:** when a counted event for that employee is stored with `occurred_at` ≥ the
+- **Resume:** when a counted event for that employee is stored with `occurred_at` > the
   alert's `from_at`, set the ongoing alert's `to_at` = that `occurred_at`. It stays `open` for
   the manager; it leaves the employee's list.
 - **Late event:** if that event makes the stretch shorter than the threshold
@@ -396,6 +396,10 @@ and `GET /me/alerts`. For each open session at a location with `activity_monitor
   `system` with `late_activity` — a GHL delay never counts against the employee.
 - **Session end** (stop, auto-close, manager edit) with an ongoing alert: `to_at` = the
   session's `ended_at` (capped at its own `from_at`); it stays open for the manager.
+- **Event after the stretch ended:** an event that arrives after the stretch was ended (by a
+  newer event or the session end) but is dated inside it (`from_at` < `occurred_at` < `to_at`)
+  shortens it the same way, and resolves it as late activity when the remainder is under the
+  threshold.
 - A later quiet stretch in the same session opens a new alert.
 
 ### 12.3 API
