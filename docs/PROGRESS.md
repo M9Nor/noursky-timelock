@@ -4,37 +4,19 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `feature/activity-monitoring-c` — activity monitoring **phase C (idle alert)** done
-  locally, **not pushed**, no migration needed. `main` still has phase B (deployed 2026-10-02).
-- **Phase C:** pure rules `onBreakAt` / `idleAlertAt` / `isLateActivity`; `detectIdle` every 60 s and
-  lazily before `/admin/live`, `/admin/alerts`, `/me/alerts` (24 h outage guard, breaks/fixed window
-  excluded, one ongoing alert per session, a stretch is never alerted twice); `endIdleStretch` on counted
-  events (`to_at`, or `late_activity`); `closeIdleOnEndedSessions` on stop/auto-close/PATCH; `/me/alerts`
-  shows ongoing idle only; `idle_minutes` 1–240; UI: manager idle rows (ongoing/ended), ⚠️ tab title,
-  employee idle banner with note, 60 s employee refresh. Deploy: push `main` (no migration), check `/health`.
-- **Tests (phase C):** unit 53, frontend 135, smoke 189/0 locally (only SKIP: foreign-appId without
-  `GHL_APP_ID`), 122/0 in production mode (test-key blocks skip); build ok.
-- **Branch before C:** `main` — activity monitoring **phase B merged and deployed** 2026-10-02 (merge
-  `a990f15`). Migration 005 applied in production before the push; `/health` ok and the new
-  routes answer 401 without a token.
-- **Phase B (live):** migration 005 (`settings.work_end`, `settings.work_days`); `PUT
-  /admin/settings` keeps absent fields; `src/activity.js` pure rules (working hours, event
-  freshness, idle, session summary); a "working, not clocked in" alert opened on webhook arrival
-  inside working hours for known employees only (events <= 6 h old, one open alert per employee),
-  resolved on clock-in, dismissable by the manager, answerable with an employee note (<= 300);
-  idle shown on the live floor (outage guard on our own events, bounded queries); per-session
-  `activity_count` / `longest_idle_sec` stored by `summarizeClosedSessions` (failures logged,
-  never break a request); `/admin/ghl-connection` returns `unknown_active_users`; UI: settings
-  fields + hints, `AlertsPanel`, live-floor chips, session columns, employee banner with inline
-  note error.
-- **Owner decisions (2026-10-02):** a dismiss does not suppress later alerts; alerts resolved by
-  clock-in that carry an employee note stay visible to the manager for 24 h ("ملاحظات الموظفين").
-- **Next:** in Innova's TimeClock settings set "نهاية الدوام" and "أيام الدوام" (until then no
-  not-clocked-in alerts); watch a few days with the manager. Untested channels on Innova: SMS,
-  WhatsApp, calls, comments, mobile, bulk/workflow. Deferred: "end at last activity"
-  (spec §11). The other install is still on Marketplace 1.0.0.
-- **Tests:** unit 49, frontend 126, smoke 175/0 locally (only SKIP: foreign-appId without
-  `GHL_APP_ID`), 121/0 in production mode (test-key blocks skip); build ok.
+- **Branch:** `main` — activity monitoring phases **A, B and C are live** (phase C merged `5226fb0`
+  and deployed 2026-10-02; verified on Innova: the idle alert reached manager and employee).
+- **Next — pilot period (owner, 2026-10-02):** clients try the app free for a first period; feedback
+  decides pricing and what comes next. Per-client onboarding checklist and the client guide live in the
+  owner's Claude Docs (internal guide `ac3e1e8b…`, client guide `e5529e64…`). Per client: install 2.0.0,
+  set timezone (`Europe/Istanbul` for Turkey; default is `Asia/Riyadh`), working hours/days, target,
+  breaks; monitoring off unless asked, idle 30–45 min to start; employees informed.
+- **Open before/at first clients:** test the Custom Page in the GHL mobile app (never tested); confirm
+  daily DB backups on Hostinger; WhatsApp/SMS/calls not yet observed carrying `userId` (owner chose not to
+  test — on WhatsApp-only clients keep monitoring off or check the first event). The second install is
+  still on Marketplace 1.0.0 (update from that sub-account).
+- **Deferred:** "end at last activity" (spec §11); non-message activity events; "note sent" state.
+- **Tests:** unit 53, frontend 135, smoke 198/0 locally.
 
 ## In Progress
 - Nothing mid-flight. The frontend redesign (spec `docs/superpowers/specs/2026-09-19-frontend-redesign-design.md`,
