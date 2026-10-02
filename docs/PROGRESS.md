@@ -13,11 +13,15 @@ _(overwrite each update)_
   `activity_monitoring = 1`, 90-day retention, `GET /admin/ghl-connection`, settings
   toggle + idle threshold + connection status. Test signing key accepted only when
   `NODE_ENV` is development/test.
-- **Next:** deploy phase A → owner configures the Marketplace app (scope
-  `conversations/message.readonly`, webhook URL, redirect URL) and Hostinger env
-  (`GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `TOKEN_ENC_KEY`, `GHL_APP_ID`) → reinstall on
-  Innova → verify what arrives (automated-message marker, mobile messages) → phase B
-  (detection, alerts, UI).
+- **Live on Innova (2026-10-02):** Marketplace **2.0.0** published (scope, webhook URL,
+  `OutboundMessage`); Hostinger env complete; Innova updated to 2.0.0 → `ghl_installs` row
+  with `conversations/message.readonly`, settings show "مربوط". Monitoring on; first events
+  stored (IG + Email). The other install is still on 1.0.0.
+- **Finding:** automatic replies arrive **without** `userId`; typed messages carry it;
+  `source` is `app` for both → phase B counts only events with a `userId` (spec §2.1,
+  DECISIONS 2026-10-02).
+- **Next:** phase B (detection, alerts, UI) on the `userId` rule. Still unobserved because
+  Innova lacks the channels: SMS, WhatsApp, calls, comments, mobile app, bulk/workflow.
 - **Tests:** unit 40, frontend 99, smoke 117 local (118 with `GHL_APP_ID=test-app`),
   108/0 in production mode; build ok.
 
@@ -73,6 +77,15 @@ _(overwrite each update)_
 
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
+
+- **2026-10-02** · Activity monitoring went live on Innova. Routes renamed to
+  `/webhooks/events` + `/oauth/callback` (GHL rejects URLs containing "ghl"). Marketplace
+  draft configured and published as 2.0.0 (GHL forced major for the new scope); new default
+  client key `timeclock-server`. Hostinger env: the first attempt was lost because "Add"
+  only stages — **Apply changes** saves (see DECISIONS). Verified: callback 503 → 502 with a
+  fake code once env loaded; Innova update stored the install; webhooks verified and stored.
+  First real events matched to the GHL thread: automatic IG reply without `userId`, typed
+  IG + Email with it → spec §2.1. · files: spec, DECISIONS.md, PROGRESS.md
 
 - **2026-09-29** · Activity monitoring **phase A** on `feature/activity-monitoring-a`
   (spec `docs/superpowers/specs/2026-09-29-activity-monitoring-design.md`, plan

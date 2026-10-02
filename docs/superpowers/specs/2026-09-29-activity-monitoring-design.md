@@ -44,12 +44,32 @@ can answer every alert. The owner approved this hybrid on 2026-09-29.
 - Other events (tasks, notes, opportunities, appointments) may be added later **only
   after** confirming on a real account that they identify the acting user.
 - Automated messages (workflows, bulk actions, campaigns) must **not** count as a
-  person's activity. The exact payload field that distinguishes them is verified on
-  Innova in phase A before it is relied upon.
+  person's activity. What distinguishes them is recorded in §2.1.
 - Messages sent from the GHL mobile app arrive the same way and count.
 
 Rejected: polling the GHL API (slower, many calls, rate limits) and the internal
 audit-log endpoint (see §1.2).
+
+### 2.1 Verified on Innova (2026-10-02)
+
+First real deliveries after the 2.0.0 install. Each event was matched against the
+conversation in GHL (sender and minute):
+
+| Event | `messageType` | `source` | `userId` | What it was |
+|---|---|---|---|---|
+| Instagram reply | `IG` | `app` | **absent** | automatic reply in the same minute as the contact's message, no team member named |
+| Instagram message | `IG` | `app` | present | typed by a team member (shown as "MA" in the thread) |
+| Email | `Email` | `app` | present | sent by the same team member |
+
+- **Rule adopted for phase B:** only events **with** a `userId` count as a person's
+  activity. An automatic reply arrives without one, so it can never make someone look
+  active.
+- `source` is `app` for both automatic and typed messages — it does **not** separate them.
+- Not yet observed, because those channels are not connected on Innova: SMS, WhatsApp,
+  outbound call, internal comment, mobile app, bulk action, workflow. In particular, a
+  bulk or workflow send started by a team member may still carry that member's `userId`;
+  this must be checked on an account where those channels exist before phase B counts
+  them, and until then the `userId` rule above is the only filter.
 
 ## 3. GHL app changes (Marketplace, one time)
 
@@ -60,7 +80,9 @@ audit-log endpoint (see §1.2).
 | Redirect URL (OAuth) | `https://timeclock.noursky.com/oauth/callback` |
 
 Each client Sub-Account must **reinstall once** and accept the new scope. Until then the
-account works exactly as today.
+account works exactly as today. (Published 2026-10-02 as **2.0.0**: GHL forces a major
+version when a scope is added, so existing installs stay on 1.0.0 until someone presses
+Update in that Sub-Account.)
 
 New Hostinger environment variables (names only; values never in the repo):
 `GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `TOKEN_ENC_KEY` (32-byte key for token encryption),

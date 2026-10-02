@@ -165,3 +165,21 @@ currently trigger a harmless rebuild.
 - **Reason:** the GHL Marketplace app settings reject any redirect/webhook URL that mentions HighLevel ("ghl"),
   so the old paths could not be registered. Nothing was registered or installed on the old paths yet, so no alias is kept.
 - **Rejected:** a subdomain or query-string trick to keep the old names — more moving parts, same result.
+
+## 2026-10-02 — Only events with a `userId` count as a person's activity
+- **Decision:** phase B treats an `OutboundMessage` as an employee's activity only when it carries a `userId`.
+  Events without one are stored but never move anyone's "last activity".
+- **Reason:** verified on Innova — an automatic Instagram reply arrived with no `userId`, while messages typed
+  by a team member (Instagram, Email) carried theirs. `source` was `app` for both, so it cannot tell them apart.
+- **Open:** bulk/workflow sends, SMS, WhatsApp, calls, comments and the mobile app are not connected on Innova and
+  remain unobserved (spec §2.1). A bulk send started by a person may carry their `userId`; check before relying on it.
+- **Rejected:** filtering on `source` (same value for both); keyword or timing heuristics (fragile, opaque).
+
+## 2026-10-02 — Marketplace 2.0.0 and a dedicated client key
+- **Decision:** the activity-monitoring app version was published as 2.0.0, and a new client key
+  (`timeclock-server`) was made the default; its id/secret are in Hostinger env only.
+- **Reason:** GHL forces a major version when a scope is added (existing installs keep 1.0.0 until updated in
+  each Sub-Account). The original key's secret was not recoverable, and the OAuth exchange must use the default key.
+- **Rejected:** keeping the old key (secret lost); a minor version (GHL disallows it for scope changes).
+- **Note:** in hPanel, "Add environment variable" only stages a change — it is saved by **Apply changes**,
+  followed by a redeploy.
