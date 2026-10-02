@@ -4,10 +4,10 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `feature/activity-monitoring-b` — activity monitoring **phase B** implemented and
-  verified locally (to be merged into `main` by the owner; nothing pushed). Phase A is live
-  and deployed. **Migration 005 is NOT yet applied in production; nothing pushed.**
-- **Phase B (local):** migration 005 (`settings.work_end`, `settings.work_days`); `PUT
+- **Branch:** `main` — activity monitoring **phase B merged and deployed** 2026-10-02 (merge
+  `a990f15`). Migration 005 applied in production before the push; `/health` ok and the new
+  routes answer 401 without a token.
+- **Phase B (live):** migration 005 (`settings.work_end`, `settings.work_days`); `PUT
   /admin/settings` keeps absent fields; `src/activity.js` pure rules (working hours, event
   freshness, idle, session summary); a "working, not clocked in" alert opened on webhook arrival
   inside working hours for known employees only (events <= 6 h old, one open alert per employee),
@@ -17,11 +17,13 @@ _(overwrite each update)_
   never break a request); `/admin/ghl-connection` returns `unknown_active_users`; UI: settings
   fields + hints, `AlertsPanel`, live-floor chips, session columns, employee banner with inline
   note error.
-- **Next (owner, in order):** (1) run `migrations/005_working_hours.sql` in phpMyAdmin on
-  production; (2) push `main`; (3) check `/health` and that `/admin/alerts` answers 401 without a
-  token; (4) in Innova's TimeClock settings set "نهاية الدوام" and "أيام الدوام"; then record 005
-  as applied in `migrations/README.md`. Deferred: idle alert, "end at last activity" (spec §11).
-- **Tests:** unit 49, frontend 122, smoke 169/0 locally (only SKIP: foreign-appId without
+- **Owner decisions (2026-10-02):** a dismiss does not suppress later alerts; alerts resolved by
+  clock-in that carry an employee note stay visible to the manager for 24 h ("ملاحظات الموظفين").
+- **Next:** in Innova's TimeClock settings set "نهاية الدوام" and "أيام الدوام" (until then no
+  not-clocked-in alerts); watch a few days with the manager. Untested channels on Innova: SMS,
+  WhatsApp, calls, comments, mobile, bulk/workflow. Deferred: idle alert, "end at last activity"
+  (spec §11). The other install is still on Marketplace 1.0.0.
+- **Tests:** unit 49, frontend 126, smoke 175/0 locally (only SKIP: foreign-appId without
   `GHL_APP_ID`), 121/0 in production mode (test-key blocks skip); build ok.
 
 ## In Progress
