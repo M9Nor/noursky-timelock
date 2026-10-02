@@ -86,3 +86,28 @@ export function sessionSummary({ startedAt, endedAt, monitoringSince, eventTimes
     longest_idle_sec: longest,
   };
 }
+
+/** True while `now` falls inside any break interval (end null = still running). */
+export function onBreakAt(breaks, now) {
+  return breaks.some(([s, e]) => Number(s) <= now && (e == null || now < Number(e)));
+}
+
+/**
+ * Phase C (spec §12.1): the `from_at` of an idle alert to open for an open session at `now`,
+ * or null. Opens once the idle time (breaks removed) reaches idle_minutes, never while the
+ * employee is on a break or inside the fixed window (both are in `breaks`).
+ */
+export function idleAlertAt({ startedAt, monitoringSince = null, lastEventAt = null, now, breaks = [], idleMinutes }) {
+  if (onBreakAt(breaks, now)) return null;
+  const from = lastActivityAt({ startedAt, monitoringSince, lastEventAt });
+  return activeSeconds(from, now, breaks) >= idleMinutes * 60 ? from : null;
+}
+
+/**
+ * Spec §12.2: an event at `occurredAt` that ends an idle stretch begun at `fromAt` too early
+ * for the stretch to have reached the threshold — a delayed GHL delivery — so the alert is
+ * resolved as late activity instead of being kept.
+ */
+export function isLateActivity({ fromAt, occurredAt, breaks = [], idleMinutes }) {
+  return activeSeconds(Number(fromAt), Number(occurredAt), breaks) < idleMinutes * 60;
+}

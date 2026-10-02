@@ -4,7 +4,17 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `main` — activity monitoring **phase B merged and deployed** 2026-10-02 (merge
+- **Branch:** `feature/activity-monitoring-c` — activity monitoring **phase C (idle alert)** done
+  locally, **not pushed**, no migration needed. `main` still has phase B (deployed 2026-10-02).
+- **Phase C:** pure rules `onBreakAt` / `idleAlertAt` / `isLateActivity`; `detectIdle` every 60 s and
+  lazily before `/admin/live`, `/admin/alerts`, `/me/alerts` (24 h outage guard, breaks/fixed window
+  excluded, one ongoing alert per session, a stretch is never alerted twice); `endIdleStretch` on counted
+  events (`to_at`, or `late_activity`); `closeIdleOnEndedSessions` on stop/auto-close/PATCH; `/me/alerts`
+  shows ongoing idle only; `idle_minutes` 1–240; UI: manager idle rows (ongoing/ended), ⚠️ tab title,
+  employee idle banner with note, 60 s employee refresh. Deploy: push `main` (no migration), check `/health`.
+- **Tests (phase C):** unit 53, frontend 135, smoke 189/0 locally (only SKIP: foreign-appId without
+  `GHL_APP_ID`), 122/0 in production mode (test-key blocks skip); build ok.
+- **Branch before C:** `main` — activity monitoring **phase B merged and deployed** 2026-10-02 (merge
   `a990f15`). Migration 005 applied in production before the push; `/health` ok and the new
   routes answer 401 without a token.
 - **Phase B (live):** migration 005 (`settings.work_end`, `settings.work_days`); `PUT
@@ -21,7 +31,7 @@ _(overwrite each update)_
   clock-in that carry an employee note stay visible to the manager for 24 h ("ملاحظات الموظفين").
 - **Next:** in Innova's TimeClock settings set "نهاية الدوام" and "أيام الدوام" (until then no
   not-clocked-in alerts); watch a few days with the manager. Untested channels on Innova: SMS,
-  WhatsApp, calls, comments, mobile, bulk/workflow. Deferred: idle alert, "end at last activity"
+  WhatsApp, calls, comments, mobile, bulk/workflow. Deferred: "end at last activity"
   (spec §11). The other install is still on Marketplace 1.0.0.
 - **Tests:** unit 49, frontend 126, smoke 175/0 locally (only SKIP: foreign-appId without
   `GHL_APP_ID`), 121/0 in production mode (test-key blocks skip); build ok.
@@ -78,6 +88,15 @@ _(overwrite each update)_
 
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
+
+- **2026-10-02** · Activity monitoring **phase C** (idle alert) on `feature/activity-monitoring-c`
+  (subagent-driven). Idle alert to manager and employee after `idle_minutes` without activity;
+  detector every 60 s, ends on activity/session end, late events resolve `late_activity` (DECISIONS).
+  Verified: unit 53/0, frontend 135/0, build ok, smoke 189/0 locally and 122/0 in production mode.
+  No migration; not pushed. · commits (oldest first): a4342f4 pure rules, 3e02d58 detect/end/late,
+  77c28be manager UI + one-minute threshold, 2f91bcb employee banner + refresh + tab title, plus the
+  docs commit. · files: src/server.js, src/activity.js, scripts/smoke-test.mjs, web/**, CLAUDE.md,
+  PROJECT.md, docs/**
 
 - **2026-10-02** · Activity monitoring **phase B** on `feature/activity-monitoring-b`
   (spec `docs/superpowers/specs/2026-09-29-activity-monitoring-design.md`, subagent-driven,

@@ -93,4 +93,48 @@ describe("AlertsPanel", () => {
       expect(container.querySelector(".count")).toBeNull();
     });
   });
+
+  it("shows an ongoing idle alert with its minutes, and an ended one with its span", async () => {
+    const now = Date.UTC(2026, 9, 5, 8, 0) / 1000;            // 12:00 Dubai
+    const from = now - 25 * 60;                                 // 11:35
+    const api = {
+      get: vi.fn(async (p) => (p.includes("status=open")
+        ? { alerts: [
+            { id: "i1", user_id: "u1", name: "سارة", kind: "idle", from_at: from, to_at: null },
+            { id: "i2", user_id: "u2", name: "أحمد", kind: "idle", from_at: now - 3600, to_at: now - 3600 + 45 * 60 },
+          ], timezone: "Asia/Dubai", server_time: now }
+        : { alerts: [], server_time: now })),
+      post: vi.fn(),
+    };
+    wrap(<AlertsPanel api={api} />);
+    expect(await screen.findByText("بدون نشاط من 11:35 · 25 د")).toBeInTheDocument();
+    expect(screen.getByText("بدون نشاط من 11:00 لـ 11:45 (45 د)")).toBeInTheDocument();
+  });
+
+  it("lists only not-clocked-in alerts under the employees' notes", async () => {
+    const now = Date.UTC(2026, 9, 5, 8, 0) / 1000;
+    const api = {
+      get: vi.fn(async (p) => (p.includes("status=open")
+        ? { alerts: [], timezone: "UTC", server_time: now }
+        : { alerts: [
+            { id: "r1", user_id: "u1", name: "سارة", kind: "idle", from_at: now - 600, to_at: now - 590, resolved_at: now - 590, employee_note: "ملاحظة خمول" },
+          ], server_time: now })),
+      post: vi.fn(),
+    };
+    const { container } = wrap(<AlertsPanel api={api} />);
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("ملاحظة خمول")).not.toBeInTheDocument();
+    expect(container.querySelector(".alerts")).toBeNull();
+  });
+
+  it("marks the tab title while alerts are open", async () => {
+    document.title = "الدوام";
+    const api = {
+      get: vi.fn(async () => ({ alerts: [{ id: "a1", user_id: "u1", name: "سارة", kind: "working_not_clocked_in", from_at: 1 }], timezone: "UTC", server_time: 2 })),
+      post: vi.fn(),
+    };
+    wrap(<AlertsPanel api={api} />);
+    await screen.findByText("سارة");
+    expect(document.title).toBe("⚠️ الدوام");
+  });
 });

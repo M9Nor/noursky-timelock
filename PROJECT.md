@@ -194,7 +194,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | `break_paid` | TINYINT(1) | 0 | إذا 1، الاستراحة الثابتة ما بتنخصم من وقت العمل |
 | `break_policy_since` | BIGINT NULL | `NULL` | UNIX seconds لآخر مرة تغيّرت فيها سياسة الاستراحة (`break_mode` أو `break_start` أو `break_end` أو `break_paid`) — `PUT /admin/settings` بيحطها `now` بس لما وحدة من هدول تتغير، وإلا بتضل متل ما هي. أي نافذة ثابتة بلّشت **قبلها** ما بتنسجل أبداً (السياسة بتسري من لحظة الحفظ، مش على نوافذ سابقة). `NULL` = بدون قيد (حسابات ما غيّرت السياسة من بعد migration 003) |
 | `activity_monitoring` | TINYINT(1) | 0 | مراقبة النشاط من GHL، مطفاية افتراضياً |
-| `idle_minutes` | INT | 30 | حد الخمول بالدقائق (10–240)، بيستخدمه الكشف بالمرحلة ب |
+| `idle_minutes` | INT | 30 | حد الخمول بالدقائق (1–240)، بيستخدمه تنبيه الخمول (مرحلة ج) وشارة الخمول الحية |
 | `activity_monitoring_since` | BIGINT NULL | `NULL` | UNIX seconds لوقت آخر تفعيل للمراقبة؛ الخمول ما بينحسب من قبله. `PUT /admin/settings` بيحطها `now` لما المراقبة تنتقل من مطفاية لمفعّلة |
 | `note_on_stop` | ENUM(`off`,`optional`,`required`) | `off` | سياسة الملاحظة عند إنهاء الدوام |
 | `max_session_hours` | DECIMAL(4,2) | 12 | حد الإغلاق التلقائي |
@@ -249,7 +249,7 @@ role === "admin"  أو  type === "agency"   →  manager
 
 - `ghl_installs` — صف لكل Sub-Account: حالة تثبيت التطبيق (`installed_at` / `uninstalled_at`)، الـ tokens مشفّرة (`access_token_enc`, `refresh_token_enc`)، `scopes`، و`last_event_at` (آخر webhook وصل).
 - `activity_events` — بيانات وصفية بس (النوع، المصدر، الوقت، `webhook_id` فريد لمنع التكرار)، **ولا محتوى** رسالة أو مكالمة. بتنحذف بعد 90 يوم.
-- `activity_alerts` — تنبيهات الخمول و"شغّال بدون تسجيل دخول" (للمرحلة ب). الفريدة `(session_id, idle_open_flag)` و`(location_id, user_id, nci_open_flag)` بتمنع تنبيه مفتوح مكرر؛ الأعمدة `*_open_flag` أرقام generated (مش نصوص) لأن MariaDB 11.8 رفض (ERROR 1901) IF() نصّي بعمود STORED.
+- `activity_alerts` — تنبيهات الخمول `idle` (المرحلة ج) و"شغّال بدون تسجيل دخول" `working_not_clocked_in` (المرحلة ب). الفريدة `(session_id, idle_open_flag)` و`(location_id, user_id, nci_open_flag)` بتمنع تنبيه مفتوح مكرر؛ الأعمدة `*_open_flag` أرقام generated (مش نصوص) لأن MariaDB 11.8 رفض (ERROR 1901) IF() نصّي بعمود STORED.
 
 ### `edits_log`
 
@@ -280,7 +280,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | POST | `/session/stop` | Body اختياري: `{ note }` (حد أقصى 500 حرف). `200 { id, started_at, ended_at, duration_sec, break_sec, note }` — `duration_sec` المدة الكاملة، ووقت العمل = `duration_sec − break_sec`. إذا في استراحة مفتوحة بتسكّر معها. الملاحظة بتنحفظ بس إذا سياسة `note_on_stop` مش `off` · `400 NOTE_REQUIRED` · `400 NOTE_TOO_LONG` · `409 NO_OPEN_SESSION` |
 | POST | `/session/break/start` | `201 { id, session_id, started_at }` · `403 BREAKS_DISABLED` · `409 NO_OPEN_SESSION` · `409 BREAK_ALREADY_OPEN` — مسموح بس لما `break_mode = flexible` |
 | POST | `/session/break/stop` | `200 { id, started_at, ended_at, duration_sec }` · `409 NO_OPEN_BREAK` — مسموح حتى لو المدير لغى الاستراحات |
-| GET | `/me/alerts` | تنبيهاتي المفتوحة → `{ alerts, timezone, server_time }` |
+| GET | `/me/alerts` | تنبيهاتي المفتوحة: تنبيهات "بدون دوام" المفتوحة، وتنبيهات الخمول **الجارية** بس (`to_at` = null) → `{ alerts, timezone, server_time }` |
 | POST | `/me/alerts/:id/note` | Body: `{ note }` (حد أقصى 300 حرف) — ملاحظة الموظف على تنبيهه المفتوح · `400 NOTE_REQUIRED` · `400 NOTE_TOO_LONG` · `404 ALERT_NOT_FOUND` |
 
 ### المدير (`role = manager` فقط، غير هيك `403 FORBIDDEN`)
@@ -294,15 +294,17 @@ role === "admin"  أو  type === "agency"   →  manager
 | GET | `/admin/export.csv?from=&to=` | CSV مع BOM: Employee, Email, Start, End, Hours (بدون الاستراحات، وما بتنزل تحت 0), Break (min), Closed by, Note, Activity, Longest idle (min). الأوقات بالـ timezone تبع الحساب، وأي خلية بتبدأ بـ = + - @ بتنسبق بـ ' لحتى ما تشتغل كمعادلة |
 | GET | `/admin/settings` | الإعدادات الحالية |
 | GET | `/admin/ghl-connection` | حالة الربط مع GHL لهالحساب: `{ installed, has_activity_scope, last_event_at, events_24h, unknown_active_users }`. `unknown_active_users` = مستخدمين إلهم نشاط بآخر 7 أيام وما فتحوا TimeClock |
-| GET | `/admin/alerts?status=` | تنبيهات النشاط: `status` = `open` (افتراضي) أو `resolved` أو `dismissed` → `{ alerts: [{ id, user_id, name, kind, from_at, to_at, status, resolution, employee_note, employee_note_at, detected_at, resolved_at }], timezone, server_time }` (الأحدث أول بحسب `from_at` ثم `id`، حد أقصى 200؛ `resolved_at` فاضي للتنبيه المفتوح) · `400 INVALID_STATUS` |
+| GET | `/admin/alerts?status=` | تنبيهات النشاط: `status` = `open` (افتراضي) أو `resolved` أو `dismissed` → `{ alerts: [{ id, user_id, session_id, name, kind, from_at, to_at, status, resolution, employee_note, employee_note_at, detected_at, resolved_at }], timezone, server_time }` (الأحدث أول بحسب `from_at` ثم `id`، حد أقصى 200؛ `resolved_at` فاضي للتنبيه المفتوح؛ `kind` ممكن يكون `idle`: `from_at` = آخر نشاط، `to_at` = وقت رجوع النشاط أو نهاية الجلسة، و`null` إذا لسا جاري) · `400 INVALID_STATUS` |
 | POST | `/admin/alerts/:id/dismiss` | تجاهل تنبيه مفتوح → `{ ok: true }` · `404 ALERT_NOT_FOUND` |
-| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, work_end (HH:MM أو null، لازم بعد work_start), work_days (1–127), late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid, activity_monitoring (boolean), idle_minutes (10–240، افتراضي 30) }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص من الـ body بيضل متل ما هو (`null` أو `""` = فاضي أو القيمة الافتراضية). قبل الحفظ بيسجّل النوافذ الثابتة اللي بلّشت تحت السياسة الحالية، وإذا تغيّر `break_mode`/`break_start`/`break_end`/`break_paid` بيصير `break_policy_since = now`. وتفعيل المراقبة بيسجّل `activity_monitoring_since = now` |
+| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, work_end (HH:MM أو null، لازم بعد work_start), work_days (1–127), late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid, activity_monitoring (boolean), idle_minutes (1–240، افتراضي 30) }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص من الـ body بيضل متل ما هو (`null` أو `""` = فاضي أو القيمة الافتراضية). قبل الحفظ بيسجّل النوافذ الثابتة اللي بلّشت تحت السياسة الحالية، وإذا تغيّر `break_mode`/`break_start`/`break_end`/`break_paid` بيصير `break_policy_since = now`. وتفعيل المراقبة بيسجّل `activity_monitoring_since = now` |
+
+كل دقيقة (وقبل `/admin/live` و`/admin/alerts` و`/me/alerts`) بيفحص السيرفر الجلسات المفتوحة ويفتح تنبيه `idle` إذا عدّى حد الخمول بلا نشاط (بدون الاستراحات، وبشرط وصل حدث للموقع بآخر 24 ساعة).
 
 ### من GHL (مش من مستخدم)
 
 | Method | Path | الوصف |
 |---|---|---|
-| POST | `/webhooks/events` | أحداث GHL. التحقق **بس** بالتوقيع `X-GHL-Signature` (Ed25519، المفتاح العام تبع GHL). توقيع غلط → `401 WEBHOOK_BAD_SIGNATURE` (بينكتب سطر تحذير بدون محتوى، مرة بالدقيقة بالكثير). التوقيع بيثبت إنه من GHL مش إنه لتطبيقنا: GHL بتوقّع كل التطبيقات بنفس المفتاح، فإذا `GHL_APP_ID` مضبوط بيتجاهل (200 بدون كتابة) أي `INSTALL`/`UNINSTALL` `appId` تبعه مختلف أو ناقص. مفتاح الاختبار بينقبل بس لما `NODE_ENV` = `development` أو `test`. أي حدث موقّع صح بيرجع `200` (انخزّن أو انتجاهل) لحتى GHL ما يعيد الإرسال. `INSTALL`/`UNINSTALL` بيحدّثوا `ghl_installs`؛ `OutboundMessage` بينخزّن كـ `activity_events` (بيانات وصفية بس) إذا `activity_monitoring = 1`، ومرة وحدة لكل `messageId` (وإذا ما في، لكل `webhookId`). إذا الحدث فيه `userId` لموظف (`role = employee`) فتح TimeClock قبل، وصار جوّا ساعات الدوام (`work_start`…`work_end`، أيام `work_days`، بتوقيت الحساب)، وعمره أقل من 6 ساعات، وما عنده جلسة مفتوحة ولا جلسة انتهت بعد وقت الحدث (التسليم المتأخر أو المكرّر ما بيفتح تنبيه قديم) → بينفتح تنبيه `working_not_clocked_in` (واحد مفتوح بالكثير لكل موظف، بجملة SQL وحدة)؛ التسليم المكرّر (ما انخزّن) ما بيفتح شي. أكبر من 256KB → `413 PAYLOAD_TOO_LARGE` |
+| POST | `/webhooks/events` | أحداث GHL. التحقق **بس** بالتوقيع `X-GHL-Signature` (Ed25519، المفتاح العام تبع GHL). توقيع غلط → `401 WEBHOOK_BAD_SIGNATURE` (بينكتب سطر تحذير بدون محتوى، مرة بالدقيقة بالكثير). التوقيع بيثبت إنه من GHL مش إنه لتطبيقنا: GHL بتوقّع كل التطبيقات بنفس المفتاح، فإذا `GHL_APP_ID` مضبوط بيتجاهل (200 بدون كتابة) أي `INSTALL`/`UNINSTALL` `appId` تبعه مختلف أو ناقص. مفتاح الاختبار بينقبل بس لما `NODE_ENV` = `development` أو `test`. أي حدث موقّع صح بيرجع `200` (انخزّن أو انتجاهل) لحتى GHL ما يعيد الإرسال. `INSTALL`/`UNINSTALL` بيحدّثوا `ghl_installs`؛ `OutboundMessage` بينخزّن كـ `activity_events` (بيانات وصفية بس) إذا `activity_monitoring = 1`، ومرة وحدة لكل `messageId` (وإذا ما في، لكل `webhookId`). إذا الحدث فيه `userId` لموظف (`role = employee`) فتح TimeClock قبل، وصار جوّا ساعات الدوام (`work_start`…`work_end`، أيام `work_days`، بتوقيت الحساب)، وعمره أقل من 6 ساعات، وما عنده جلسة مفتوحة ولا جلسة انتهت بعد وقت الحدث (التسليم المتأخر أو المكرّر ما بيفتح تنبيه قديم) → بينفتح تنبيه `working_not_clocked_in` (واحد مفتوح بالكثير لكل موظف، بجملة SQL وحدة)؛ التسليم المكرّر (ما انخزّن) ما بيفتح شي. الحدث المحسوب بيسكّر فترة الخمول الجارية لهالموظف (`to_at`)، وإذا الفترة ما وصلت للحد بتنحل `late_activity`. الحدث اللي بيوصل بعد ما انتهت الفترة (بحدث أحدث أو بنهاية الجلسة) وتاريخه جوّاها بيقصّرها بنفس الطريقة، وبينحل `late_activity` إذا الباقي أقل من الحد. أكبر من 256KB → `413 PAYLOAD_TOO_LARGE` |
 | GET | `/oauth/callback?code=` | رابط الرجوع بعد تثبيت التطبيق. بيبدّل الكود بتوكن من `services.leadconnectorhq.com/oauth/token` وبيخزّنه **مشفّر** (AES-256-GCM بـ `TOKEN_ENC_KEY`) بـ `ghl_installs`. بيرجّع صفحة عربية: `200` نجاح، `400` بدون كود، `503` السيرفر مش مُعدّ، `502` GHL رفض الكود، `504` ما قدرنا نوصل لـ GHL (مهلة 10 ثواني) |
 
 ### رموز الأخطاء
@@ -335,7 +337,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | `NO_OPEN_BREAK` | 409 | | لا توجد استراحة مفتوحة |
 | `NOTE_REQUIRED` | 400 | المدير خلّى الملاحظة إلزامية | اكتب ملاحظة قبل إنهاء الدوام |
 | `NOTE_TOO_LONG` | 400 | أكتر من 500 حرف (ملاحظة الإنهاء) أو 300 (ملاحظة التنبيه) | الملاحظة طويلة جداً |
-| `INVALID_IDLE_MINUTES` | 400 | حد الخمول مش رقم صحيح بين 10 و240 | حد الخمول لازم يكون بين 10 و240 دقيقة |
+| `INVALID_IDLE_MINUTES` | 400 | حد الخمول مش رقم صحيح بين 1 و240 | حد الخمول لازم يكون بين 1 و240 دقيقة |
 | `INVALID_WORK_END` | 400 | نهاية الدوام مش `HH:MM` أو مش بعد البداية | نهاية الدوام غير صحيحة (لازم تكون بعد البداية) |
 | `INVALID_WORK_DAYS` | 400 | أيام الدوام مش رقم صحيح بين 1 و127 | اختار يوم دوام واحد على الأقل |
 | `INVALID_STATUS` | 400 | `status` مش `open`/`resolved`/`dismissed` | — |

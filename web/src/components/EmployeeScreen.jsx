@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import Button from "./Button.jsx";
 import Icon from "./Icon.jsx";
 import { useToast } from "./ToastContext.jsx";
-import { formatClock, formatHours, formatTime, serverOffset, nowWithOffset, liveTotals } from "../time.js";
+import { formatClock, formatHours, formatIdle, formatTime, serverOffset, nowWithOffset, liveTotals } from "../time.js";
 import MyHistory from "./MyHistory.jsx";
 import StopNoteDialog from "./StopNoteDialog.jsx";
+import { useAlertTitle } from "../alertTitle.js";
 
 const GENERIC_ERROR = "حدث خطأ، حاول مرة أخرى";
 // Specific, actionable messages for error codes the employee can act on directly,
@@ -24,7 +25,7 @@ export default function EmployeeScreen({ api, user }) {
   const [targetSec, setTargetSec] = useState(8 * 3600);
   const [policy, setPolicy] = useState({ break_mode: "off", break_start: null, break_end: null, break_paid: false, note_on_stop: "off" });
   const [askNote, setAskNote] = useState(false);
-  const [alerts, setAlerts] = useState({ list: [], timezone: null });
+  const [alerts, setAlerts] = useState({ list: [], timezone: null, serverTime: null });
   const [alertNote, setAlertNote] = useState("");
   const [alertNoteError, setAlertNoteError] = useState("");
   const [sendingNote, setSendingNote] = useState(false);
@@ -41,9 +42,9 @@ export default function EmployeeScreen({ api, user }) {
     // Alerts are a convenience: a failure here never blocks clocking in.
     try {
       const a = await api.get("/me/alerts");
-      setAlerts({ list: a.alerts ?? [], timezone: a.timezone ?? null });
+      setAlerts({ list: a.alerts ?? [], timezone: a.timezone ?? null, serverTime: a.server_time ?? null });
     } catch {
-      setAlerts({ list: [], timezone: null });
+      setAlerts({ list: [], timezone: null, serverTime: null });
     }
   }
 
@@ -68,6 +69,12 @@ export default function EmployeeScreen({ api, user }) {
       }
     })();
   }, [api]);
+
+  // Alerts appear without a reload: the screen re-reads status and alerts every minute.
+  useEffect(() => {
+    const id = setInterval(() => refresh().catch(() => {}), 60000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
@@ -156,9 +163,14 @@ export default function EmployeeScreen({ api, user }) {
       : run(() => api.post("/session/break/start"), "بدأت الاستراحة");
   }
 
+  // Computed before the loading early-return so hook order never changes between renders.
+  const open = status?.open_session;
+  const nci = !open ? alerts.list.find((a) => a.kind === "working_not_clocked_in") : null;
+  const idle = open ? alerts.list.find((a) => a.kind === "idle" && a.to_at == null) : null;
+  useAlertTitle(Boolean(nci || idle));
+
   if (!status && !error) return <div className="panel muted">جارٍ التحميل…</div>;
 
-  const open = status?.open_session;
   const { sessionSec, todaySec, onBreak, inFixed } = liveTotals(status, nowWithOffset(offsetRef.current));
   const clock = formatClock(sessionSec);
   const remain = Math.max(0, targetSec - todaySec);
@@ -169,7 +181,17 @@ export default function EmployeeScreen({ api, user }) {
     : open ? ["work", "داخل الدوام"] : ["off", "لم يسجّل الدخول"];
   // An employee already on a break can always end it, even if the mode changed since.
   const showBreak = open && (policy.break_mode === "flexible" || onBreak);
-  const nci = !open ? alerts.list.find((a) => a.kind === "working_not_clocked_in") : null;
+
+  const noteBox = (id) => (
+    <>
+      <div className="field">
+        <label htmlFor="alert-note">ملاحظة للمدير</label>
+        <textarea id="alert-note" maxLength={300} value={alertNote} onChange={(e) => setAlertNote(e.target.value)} />
+        {alertNoteError && <span className="err">{alertNoteError}</span>}
+      </div>
+      <Button variant="ghost" size="sm" disabled={!alertNote.trim() || sendingNote} onClick={() => sendAlertNote(id)}>إرسال الملاحظة</Button>
+    </>
+  );
 
   return (
     <div className="grid emp">
@@ -211,12 +233,14 @@ export default function EmployeeScreen({ api, user }) {
           <div className="actions">
             <Button onClick={toggle} loading={loading} size="lg"><Icon name="play" />بدء الدوام</Button>
           </div>
-          <div className="field">
-            <label htmlFor="alert-note">ملاحظة للمدير</label>
-            <textarea id="alert-note" maxLength={300} value={alertNote} onChange={(e) => setAlertNote(e.target.value)} />
-            {alertNoteError && <span className="err">{alertNoteError}</span>}
-          </div>
-          <Button variant="ghost" size="sm" disabled={!alertNote.trim() || sendingNote} onClick={() => sendAlertNote(nci.id)}>إرسال الملاحظة</Button>
+          {noteBox(nci.id)}
+        </section>
+      )}
+
+      {idle && (
+        <section className="panel notice" role="status">
+          <p>ما في نشاط من {formatTime(idle.from_at, alerts.timezone)} ({formatIdle(Math.max(0, (alerts.serverTime ?? idle.from_at) - idle.from_at))})، والمدير رح يشوفها. إذا عم تشتغل اكتبله شو عم تعمل.</p>
+          {noteBox(idle.id)}
         </section>
       )}
 

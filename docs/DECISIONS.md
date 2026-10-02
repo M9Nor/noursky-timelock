@@ -219,3 +219,14 @@ currently trigger a harmless rebuild.
   sessions from starving behind older ones the no-events guard keeps refusing.
 - **Rejected:** suppressing alerts for the rest of the day after a dismiss (owner prefers every new
   stretch of unclocked work to be raised); showing notes in the session detail (the alert has no session).
+
+## 2026-10-02 — Phase C: the idle alert, after all
+- **Decision:** an idle alert to the manager and the employee once a clocked-in employee has no activity
+  for longer than `idle_minutes` (now 1–240). It stays open for the manager until dismissed; the
+  employee sees it while it is ongoing and can answer with a note. Delivery is in the app: both screens
+  refresh every minute and the tab title shows ⚠️. A detector runs every 60 s; activity or a session end
+  closes the stretch; a late event inside the gap resolves it `late_activity`.
+- **Reason:** the owner wants to be told, not to look for a chip; breaks, the 24 h outage guard and the
+  late-event rule keep it fair. "End at last activity" stays deferred (no automatic pay effect).
+- **Rejected:** auto-closing the alert on resume (the manager would miss the stretch); browser
+  notifications and GHL SMS/WhatsApp (permission prompts inside the iframe; cost).

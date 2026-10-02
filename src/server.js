@@ -12,7 +12,7 @@ import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID }
 import { localZone, localDate, wallToUtc, fixedWindows, localDayBounds } from "./tz.js";
 import { bodyLimit } from "hono/body-limit";
 import { verifyGhlSignature, parseWebhook, testKeyAllowed, isForOurApp, activityDedupeKey } from "./ghlWebhook.js";
-import { isWithinWorkHours, isFreshEvent, idleSeconds, sessionSummary } from "./activity.js";
+import { isWithinWorkHours, isFreshEvent, idleSeconds, sessionSummary, idleAlertAt, isLateActivity } from "./activity.js";
 import { exchangeCode } from "./ghlOAuth.js";
 import { encryptToken } from "./tokenCrypto.js";
 
@@ -284,6 +284,7 @@ async function autoCloseStale(loc = null) {
         AND (:loc IS NULL OR b.location_id = :loc)`,
     { loc }
   );
+  await closeIdleOnEndedSessions(loc).catch((e) => console.error("[idle-close]", e));
   await summarizeClosedSessions(loc).catch((e) => console.error("[activity-summary]", e));
 }
 
@@ -305,6 +306,16 @@ async function eventTimes(loc, uid, from, to) {
     { loc, uid, from, to }
   );
   return rows.map((r) => Number(r.occurred_at));
+}
+
+/** This employee's latest counted event inside [from, to], or null. */
+async function lastEventAt(loc, uid, from, to) {
+  const [row] = await q(
+    `SELECT MAX(occurred_at) AS at FROM activity_events
+      WHERE location_id = :loc AND user_id = :uid AND occurred_at >= :from AND occurred_at <= :to`,
+    { loc, uid, from, to }
+  );
+  return row?.at == null ? null : Number(row.at);
 }
 
 /**
@@ -399,20 +410,125 @@ async function liveActivity(loc, st, employees, t) {
   for (const e of employees) {
     if (!e.session_id) continue;
     const start = Number(e.started_at);
-    const [last] = await q(
-      `SELECT MAX(occurred_at) AS at FROM activity_events
-        WHERE location_id = :loc AND user_id = :uid AND occurred_at >= :from AND occurred_at <= :t`,
-      { loc, uid: e.user_id, from: start, t }
-    );
-    const lastEventAt = last?.at == null ? null : Number(last.at);
+    const lastAt = await lastEventAt(loc, e.user_id, start, t);
     const row = out.get(e.user_id);
-    row.last_activity_at = lastEventAt;
+    row.last_activity_at = lastAt;
     row.idle_sec = idleSeconds({
-      startedAt: start, monitoringSince: st.activity_monitoring_since, lastEventAt, now: t,
+      startedAt: start, monitoringSince: st.activity_monitoring_since, lastEventAt: lastAt, now: t,
       breaks: await sessionBreaks({ id: e.session_id, started_at: start }, st, t),
     });
   }
   return out;
+}
+
+/**
+ * Phase C (spec §12.1): opens an idle alert for every open session at a monitored location
+ * whose quiet stretch (breaks removed) reached idle_minutes. Runs on a 60 s timer and lazily
+ * before the alert and live reads (the employee's own poll passes `uid` and scans only that
+ * employee's session). ux_alert_idle_open keeps one ongoing alert per session; a stretch
+ * already alerted (same session and from_at) is never alerted again, even after a dismiss.
+ * Outage guard: no alert unless the location received an event in the last 24 h.
+ */
+async function detectIdle(loc = null, uid = null) {
+  const locs = loc
+    ? [loc]
+    : (await q("SELECT location_id FROM settings WHERE activity_monitoring = 1")).map((r) => r.location_id);
+  const t = now();
+  for (const l of locs) {
+    try {
+      const st = await getSettings(l);
+      if (!st?.activity_monitoring) continue;
+      const [fresh] = await q(
+        "SELECT 1 AS ok FROM activity_events WHERE location_id = :loc AND occurred_at > :cutoff LIMIT 1",
+        { loc: l, cutoff: t - 86400 }
+      );
+      if (!fresh) continue;
+      const open = await q(
+        `SELECT id, user_id, started_at FROM sessions
+          WHERE location_id = :loc AND ended_at IS NULL AND (:uid IS NULL OR user_id = :uid)`,
+        { loc: l, uid }
+      );
+      for (const s of open) {
+        const start = Number(s.started_at);
+        const fromAt = idleAlertAt({
+          startedAt: start, monitoringSince: st.activity_monitoring_since,
+          lastEventAt: await lastEventAt(l, s.user_id, start, t), now: t,
+          breaks: await sessionBreaks(s, st, t), idleMinutes: Number(st.idle_minutes),
+        });
+        if (fromAt == null) continue;
+        const [seen] = await q(
+          "SELECT 1 AS ok FROM activity_alerts WHERE session_id = :sid AND kind = 'idle' AND from_at = :fromAt LIMIT 1",
+          { sid: s.id, fromAt }
+        );
+        if (seen) continue;
+        const ins = await q(
+          `INSERT IGNORE INTO activity_alerts (id, location_id, user_id, session_id, kind, from_at, detected_at, status)
+           VALUES (:id, :loc, :uid, :sid, 'idle', :fromAt, :t, 'open')`,
+          { id: randomUUID(), loc: l, uid: s.user_id, sid: s.id, fromAt, t }
+        );
+        // Race with the webhook: an event stored after lastEventAt was read but before this row
+        // existed found no stretch to end. Look again now that the alert is visible.
+        if (ins.affectedRows > 0) {
+          const [after] = await q(
+            `SELECT MIN(occurred_at) AS at FROM activity_events
+              WHERE location_id = :loc AND user_id = :uid AND occurred_at > :fromAt`,
+            { loc: l, uid: s.user_id, fromAt }
+          );
+          if (after?.at != null) await endIdleStretch(st, l, s.user_id, Number(after.at), t);
+        }
+      }
+    } catch (e) {
+      console.error("[idle-detect]", l, e);
+    }
+  }
+}
+
+/**
+ * Spec §12.2: a counted event ends this employee's idle stretch. The alert keeps status open
+ * for the manager with to_at = the event time — or, when the stretch never really reached the
+ * threshold (a delayed delivery), it is resolved as late activity. It also covers a stretch
+ * that was already ended by a newer event or by the session end: an event dated inside it
+ * (out-of-order delivery, a delivery after the stop) shortens it the same way. `<` on
+ * from_at: an event in the same second as the start is the same moment, not activity after it.
+ */
+async function endIdleStretch(st, loc, uid, at, t) {
+  const rows = await q(
+    `SELECT a.id, a.from_at, a.session_id, s.started_at
+       FROM activity_alerts a JOIN sessions s ON s.id = a.session_id
+      WHERE a.location_id = :loc AND a.user_id = :uid AND a.kind = 'idle'
+        AND a.status = 'open' AND a.from_at < :at AND (a.to_at IS NULL OR a.to_at > :at)`,
+    { loc, uid, at }
+  );
+  for (const a of rows) {
+    const breaks = await sessionBreaks({ id: a.session_id, started_at: a.started_at }, st, at);
+    if (isLateActivity({ fromAt: a.from_at, occurredAt: at, breaks, idleMinutes: Number(st.idle_minutes) })) {
+      await q(
+        `UPDATE activity_alerts
+            SET to_at = :at, status = 'resolved', resolution = 'late_activity', resolved_by = 'system', resolved_at = :t
+          WHERE id = :id AND status = 'open' AND (to_at IS NULL OR to_at > :at)`,
+        { at, t, id: a.id }
+      );
+    } else {
+      await q(
+        "UPDATE activity_alerts SET to_at = :at WHERE id = :id AND status = 'open' AND (to_at IS NULL OR to_at > :at)",
+        { at, id: a.id }
+      );
+    }
+  }
+}
+
+/**
+ * Spec §12.2: an ongoing idle alert of a session that has ended (stop, auto-close, manager
+ * edit) ends with the session; it stays open for the manager. One rule for every close path.
+ */
+async function closeIdleOnEndedSessions(loc = null) {
+  await q(
+    `UPDATE activity_alerts a JOIN sessions s ON s.id = a.session_id
+        SET a.to_at = GREATEST(a.from_at, s.ended_at)
+      WHERE a.kind = 'idle' AND a.status = 'open' AND a.to_at IS NULL AND s.ended_at IS NOT NULL
+        AND (:loc IS NULL OR a.location_id = :loc)`,
+    { loc }
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -579,9 +695,11 @@ const ALERT_NOTE_MAX = 300;
 
 app.get("/me/alerts", authed, async (c) => {
   const { uid, loc } = c.get("claims");
+  await detectIdle(loc, uid).catch((e) => console.error("[idle-detect]", e));
   const alerts = (await q(
     `SELECT ${ALERT_COLUMNS} FROM activity_alerts a
       WHERE a.location_id = :loc AND a.user_id = :uid AND a.status = 'open'
+        AND (a.kind <> 'idle' OR a.to_at IS NULL)
       ORDER BY a.from_at DESC`,
     { loc, uid }
   )).map(alertRow);
@@ -741,6 +859,7 @@ app.post("/session/stop", authed, async (c) => {
       { id: s.id, t, st: s.started_at }
     );
     await conn.commit();
+    await closeIdleOnEndedSessions(loc).catch((e) => console.error("[idle-close]", e));
     await summarizeClosedSessions(loc).catch((e) => console.error("[activity-summary]", e));
     return c.json({
       id: s.id, started_at: s.started_at, ended_at: t,
@@ -759,6 +878,7 @@ app.post("/session/stop", authed, async (c) => {
 app.get("/admin/live", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
   await autoCloseStale(loc);
+  await detectIdle(loc).catch((e) => console.error("[idle-detect]", e));
   const employees = await q(
     `SELECT e.user_id, e.name, e.email, s.id AS session_id, s.started_at, b.started_at AS break_started_at
        FROM employees e
@@ -987,6 +1107,7 @@ app.patch("/admin/sessions/:id", authed, managerOnly, async (c) => {
       }
     );
     await conn.commit();
+    await closeIdleOnEndedSessions(loc).catch((e) => console.error("[idle-close]", e));
     // The edit cleared the summary: refill it whatever the session's age (the periodic pass
     // only looks at recent ones), as long as monitoring was ever on here.
     await summarizeSession(loc, st, { id, user_id: old.user_id, started_at: s, ended_at: e })
@@ -1085,7 +1206,7 @@ app.get("/admin/ghl-connection", authed, managerOnly, async (c) => {
 });
 
 const ALERT_STATUSES = ["open", "resolved", "dismissed"];
-const ALERT_COLUMNS = `a.id, a.user_id, a.kind, a.from_at, a.to_at, a.status, a.resolution,
+const ALERT_COLUMNS = `a.id, a.user_id, a.session_id, a.kind, a.from_at, a.to_at, a.status, a.resolution,
   a.employee_note, a.employee_note_at, a.detected_at, a.resolved_at`;
 /** BIGINT columns as plain numbers, so the UI never sees a string timestamp. */
 function alertRow(r) {
@@ -1098,6 +1219,7 @@ function alertRow(r) {
 
 app.get("/admin/alerts", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
+  await detectIdle(loc).catch((e) => console.error("[idle-detect]", e));
   const status = c.req.query("status") ?? "open";
   if (!ALERT_STATUSES.includes(status)) throw new HttpError(400, "INVALID_STATUS");
   const alerts = (await q(
@@ -1182,7 +1304,7 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   // Same empty-field rule as the grace: "" / null mean the 30-minute default.
   const rawIdle = pick("idle_minutes");
   const idleMinutes = rawIdle === undefined || rawIdle === null || rawIdle === "" ? 30 : Number(rawIdle);
-  if (!Number.isInteger(idleMinutes) || idleMinutes < 10 || idleMinutes > 240) {
+  if (!Number.isInteger(idleMinutes) || idleMinutes < 1 || idleMinutes > 240) {
     throw new HttpError(400, "INVALID_IDLE_MINUTES");
   }
 
@@ -1214,6 +1336,15 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
       monitoring: monitoring ? 1 : 0, idleMinutes,
     }
   );
+  // Monitoring switched off: nothing detects or ends an idle stretch any more, so the ongoing
+  // ones end now (they stay open for the manager, like any other ended stretch).
+  if (cur.activity_monitoring && !monitoring) {
+    await q(
+      `UPDATE activity_alerts SET to_at = GREATEST(from_at, :t)
+        WHERE location_id = :loc AND kind = 'idle' AND status = 'open' AND to_at IS NULL`,
+      { t: now(), loc }
+    );
+  }
   return c.json(await getSettings(loc));
 });
 
@@ -1353,7 +1484,11 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
       );
       // Only an event with a user id is a person's activity (spec §2.1). A duplicate delivery
       // (nothing stored) opens nothing: its first delivery already did, or was dismissed.
-      if (ev.userId && stored.affectedRows > 0) await openNotClockedInAlert(st, ev.locationId, String(ev.userId), ev.occurredAt, t);
+      if (ev.userId && stored.affectedRows > 0) {
+        await endIdleStretch(st, ev.locationId, String(ev.userId), ev.occurredAt, t)
+          .catch((e) => console.error("[idle-resume]", e));
+        await openNotClockedInAlert(st, ev.locationId, String(ev.userId), ev.occurredAt, t);
+      }
     }
   }
   return c.json({ ok: true });
@@ -1425,6 +1560,7 @@ app.get("/*", serveStatic({ path: "./public/index.html" })); // SPA fallback
 /* ------------------------------------------------------------------ */
 
 setInterval(() => autoCloseStale().catch((e) => console.error("[auto-close]", e)), AUTO_CLOSE_EVERY_MS);
+setInterval(() => detectIdle().catch((e) => console.error("[idle-detect]", e)), 60 * 1000);
 setInterval(() => purgeOldActivity().catch((e) => console.error("[activity-retention]", e)), AUTO_CLOSE_EVERY_MS);
 
 const port = Number(env.PORT || 3000);
