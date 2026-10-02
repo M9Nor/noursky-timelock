@@ -349,4 +349,48 @@ describe("EmployeeScreen", () => {
     expect(statusCalls()).toBe(1);
     await waitFor(() => expect(statusCalls()).toBe(2), { timeout: 4000 });
   });
+
+  it("tells a clocked-in employee they have been idle", async () => {
+    const t = nowSec();
+    const from = t - 25 * 60;
+    const api = withAlerts(makeApi({ open_session: { id: "s1", started_at: t - 3600 }, worked_sec: 3600, server_time: t }),
+      { alerts: [{ id: "i1", kind: "idle", from_at: from, to_at: null }], timezone: "UTC", server_time: t });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    const hhmm = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" }).format(new Date(from * 1000));
+    expect(await screen.findByText(`ما في نشاط من ${hhmm} (25 د)، والمدير رح يشوفها. إذا عم تشتغل اكتبله شو عم تعمل.`)).toBeInTheDocument();
+  });
+
+  it("sends a note on the idle alert", async () => {
+    const t = nowSec();
+    const api = withAlerts(makeApi({ open_session: { id: "s1", started_at: t - 3600 }, worked_sec: 3600, server_time: t }),
+      { alerts: [{ id: "i1", kind: "idle", from_at: t - 600, to_at: null }], timezone: "UTC", server_time: t });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    fireEvent.change(await screen.findByLabelText("ملاحظة للمدير"), { target: { value: "كنت بمكالمة" } });
+    fireEvent.click(screen.getByRole("button", { name: "إرسال الملاحظة" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/me/alerts/i1/note", { note: "كنت بمكالمة" }));
+  });
+
+  it("refreshes status and alerts every minute", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const api = withAlerts(makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() }), { alerts: [], timezone: "UTC" });
+      wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+      await waitFor(() => expect(api.get).toHaveBeenCalledWith("/me/alerts"));
+      const before = api.get.mock.calls.filter(([p]) => p === "/me/alerts").length;
+      await act(async () => { vi.advanceTimersByTime(60000); });
+      await waitFor(() => expect(api.get.mock.calls.filter(([p]) => p === "/me/alerts").length).toBeGreaterThan(before));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks the tab title while the employee has an alert", async () => {
+    document.title = "الدوام";
+    const t = nowSec();
+    const api = withAlerts(makeApi({ open_session: { id: "s1", started_at: t - 3600 }, worked_sec: 3600, server_time: t }),
+      { alerts: [{ id: "i1", kind: "idle", from_at: t - 600, to_at: null }], timezone: "UTC", server_time: t });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    await screen.findByLabelText("ملاحظة للمدير");
+    expect(document.title).toBe("⚠️ الدوام");
+  });
 });
