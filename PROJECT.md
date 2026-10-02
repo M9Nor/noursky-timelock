@@ -184,6 +184,8 @@ role === "admin"  أو  type === "agency"   →  manager
 | `timezone` | VARCHAR(64) | `Asia/Riyadh` | IANA timezone |
 | `daily_target_hours` | DECIMAL(4,2) | 8 | |
 | `work_start` | CHAR(5) NULL | `09:00` | أول وقت العمل الرسمي. `NULL` = التأخير معطّل. لو محدد، أي جلسة أول جلسة بيومها المحلي وبلّشت بعد `work_start + late_grace_minutes` بتنعتبر متأخرة (شوف `/admin/report`، §5.1) |
+| `work_end` | CHAR(5) NULL | `NULL` | نهاية الدوام `HH:MM` بتوقيت الحساب، لازم تكون بعد `work_start` (نفس اليوم). `NULL` = ما في نهاية دوام محددة |
+| `work_days` | TINYINT UNSIGNED | 127 | bitmask أيام الدوام بتوقيت الحساب: bit 0 = الأحد … bit 6 = السبت (127 = كل الأيام، القيمة بين 1 و127) |
 | `late_grace_minutes` | INT | 15 | سماحية بالدقايق قبل ما الجلسة تنعتبر متأخرة |
 | `breaks_enabled` | TINYINT(1) | 0 | متزامن تلقائياً مع `break_mode = 'flexible'` — للتوافق مع كود قديم، مش مصدر الحقيقة بعد الآن (شوف `break_mode`) |
 | `break_mode` | ENUM(`off`,`fixed`,`flexible`) | `off` | نوع الاستراحة: بدون / ثابتة يحددها المدير / مرنة بزر الموظف |
@@ -290,7 +292,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | GET | `/admin/export.csv?from=&to=` | CSV مع BOM: Employee, Email, Start, End, Hours (بدون الاستراحات، وما بتنزل تحت 0), Break (min), Closed by, Note. الأوقات بالـ timezone تبع الحساب، وأي خلية بتبدأ بـ = + - @ بتنسبق بـ ' لحتى ما تشتغل كمعادلة |
 | GET | `/admin/settings` | الإعدادات الحالية |
 | GET | `/admin/ghl-connection` | حالة الربط مع GHL لهالحساب: `{ installed, has_activity_scope, last_event_at, events_24h }` |
-| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid, activity_monitoring (boolean), idle_minutes (10–240، افتراضي 30) }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص = القيمة الافتراضية. قبل الحفظ بيسجّل النوافذ الثابتة اللي بلّشت تحت السياسة الحالية، وإذا تغيّر `break_mode`/`break_start`/`break_end`/`break_paid` بيصير `break_policy_since = now`. وتفعيل المراقبة بيسجّل `activity_monitoring_since = now` |
+| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, work_end (HH:MM أو null، لازم بعد work_start), work_days (1–127), late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid, activity_monitoring (boolean), idle_minutes (10–240، افتراضي 30) }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص من الـ body بيضل متل ما هو (`null` أو `""` = فاضي أو القيمة الافتراضية). قبل الحفظ بيسجّل النوافذ الثابتة اللي بلّشت تحت السياسة الحالية، وإذا تغيّر `break_mode`/`break_start`/`break_end`/`break_paid` بيصير `break_policy_since = now`. وتفعيل المراقبة بيسجّل `activity_monitoring_since = now` |
 
 ### من GHL (مش من مستخدم)
 
@@ -329,6 +331,8 @@ role === "admin"  أو  type === "agency"   →  manager
 | `NOTE_REQUIRED` | 400 | المدير خلّى الملاحظة إلزامية | اكتب ملاحظة قبل إنهاء الدوام |
 | `NOTE_TOO_LONG` | 400 | أكتر من 500 حرف | الملاحظة طويلة جداً |
 | `INVALID_IDLE_MINUTES` | 400 | حد الخمول مش رقم صحيح بين 10 و240 | حد الخمول لازم يكون بين 10 و240 دقيقة |
+| `INVALID_WORK_END` | 400 | نهاية الدوام مش `HH:MM` أو مش بعد البداية | نهاية الدوام غير صحيحة (لازم تكون بعد البداية) |
+| `INVALID_WORK_DAYS` | 400 | أيام الدوام مش رقم صحيح بين 1 و127 | اختار يوم دوام واحد على الأقل |
 | `INVALID_ACTIVITY_MONITORING` | 400 | `activity_monitoring` مش boolean | إعداد مراقبة النشاط غير صحيح |
 | `WEBHOOK_BAD_SIGNATURE` | 401 | حدث بدون توقيع GHL صحيح | — (مش للواجهة) |
 | `PAYLOAD_TOO_LARGE` | 413 | جسم الحدث أكبر من 256KB | — (مش للواجهة) |

@@ -462,7 +462,7 @@ check("fixed break window saved",
     && fxSaved.body?.break_end === "14:00" && fxSaved.body?.break_paid === false && fxSaved.body?.breaks_enabled === false,
   `(${JSON.stringify(fxSaved.body)})`);
 check("fixed mode without a window → 400",
-  (await fxPolicy({ break_mode: "fixed" })).body?.error === "INVALID_BREAK_WINDOW");
+  (await fxPolicy({ break_mode: "fixed", break_start: null, break_end: null })).body?.error === "INVALID_BREAK_WINDOW");
 check("fixed window ending before it starts → 400",
   (await fxPolicy({ break_mode: "fixed", break_start: "14:00", break_end: "13:00" })).body?.error === "INVALID_BREAK_WINDOW");
 check("malformed window time → 400",
@@ -691,6 +691,40 @@ if (tdAfter > 0) {
   console.log("  SKIP  across-midnight today check (less than a minute past local midnight)");
 }
 await cleanupLocation(TDLOC);
+
+// --- Working hours and "absent = keep" (activity phase B, spec §4.2 / §5.4). Own location.
+const WHLOC = `${LOC}-wh`;
+const whMgr = await sso({ userId: `${WHLOC}-m1`, role: "admin", type: "account", activeLocation: WHLOC, userName: "مدير الدوام", email: "whm@x.com" });
+const WHM = whMgr.body?.token;
+const whDefaults = await call(WHM, "GET", "/admin/settings");
+check("working hours default to no end and every day",
+  whDefaults.body?.work_end === null && whDefaults.body?.work_days === 127,
+  `(${JSON.stringify({ e: whDefaults.body?.work_end, d: whDefaults.body?.work_days })})`);
+const whSaved = await call(WHM, "PUT", "/admin/settings",
+  { timezone: "Asia/Riyadh", daily_target_hours: 8, max_session_hours: 12, work_start: "09:00", work_end: "17:30", work_days: 95, idle_minutes: 45 });
+check("work_end and work_days are saved",
+  whSaved.status === 200 && whSaved.body?.work_end === "17:30" && whSaved.body?.work_days === 95,
+  `(${whSaved.status} ${JSON.stringify(whSaved.body)})`);
+const whKeep = await call(WHM, "PUT", "/admin/settings", { late_grace_minutes: 20 });
+check("a field absent from the body keeps its stored value",
+  whKeep.status === 200 && whKeep.body?.late_grace_minutes === 20 && whKeep.body?.timezone === "Asia/Riyadh"
+    && whKeep.body?.work_start === "09:00" && whKeep.body?.work_end === "17:30" && whKeep.body?.work_days === 95
+    && whKeep.body?.idle_minutes === 45,
+  `(${whKeep.status} ${JSON.stringify(whKeep.body)})`);
+check("work_end before work_start → 400",
+  (await call(WHM, "PUT", "/admin/settings", { work_end: "08:00" })).body?.error === "INVALID_WORK_END");
+check("work_end equal to work_start → 400",
+  (await call(WHM, "PUT", "/admin/settings", { work_end: "09:00" })).body?.error === "INVALID_WORK_END");
+check("malformed work_end → 400",
+  (await call(WHM, "PUT", "/admin/settings", { work_end: "5pm" })).body?.error === "INVALID_WORK_END");
+check("moving work_start past the stored work_end → 400",
+  (await call(WHM, "PUT", "/admin/settings", { work_start: "18:00" })).body?.error === "INVALID_WORK_END");
+check("work_days 0 → 400", (await call(WHM, "PUT", "/admin/settings", { work_days: 0 })).body?.error === "INVALID_WORK_DAYS");
+check("work_days 128 → 400", (await call(WHM, "PUT", "/admin/settings", { work_days: 128 })).body?.error === "INVALID_WORK_DAYS");
+check("non-integer work_days → 400", (await call(WHM, "PUT", "/admin/settings", { work_days: "95" })).body?.error === "INVALID_WORK_DAYS");
+const whCleared = await call(WHM, "PUT", "/admin/settings", { work_end: null });
+check("work_end can be cleared with null", whCleared.body?.work_end === null, `(${JSON.stringify(whCleared.body?.work_end)})`);
+await cleanupLocation(WHLOC);
 
 // --- Activity monitoring (phase A): settings, connection status, webhooks, OAuth. ---
 const AWLOC = `${LOC}-aw`;

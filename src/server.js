@@ -890,41 +890,56 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   // otherwise saving a new policy would silently drop them.
   await recordOpenFixedBreaks(loc);
   const b = (await c.req.json().catch(() => null)) ?? {};
-  try { new Intl.DateTimeFormat("en", { timeZone: b.timezone }); } catch { throw new HttpError(400, "INVALID_TIMEZONE"); }
-  if (!b.timezone) throw new HttpError(400, "INVALID_TIMEZONE");
-  const target = Number(b.daily_target_hours), max = Number(b.max_session_hours);
+  // A field absent from the body keeps its stored value (spec §5.4): a page running an older
+  // bundle does not know newer fields and must not reset them. null / "" keep their meaning
+  // (a cleared value, or the documented default).
+  const cur = (await getSettings(loc)) ?? {};
+  const has = (k) => b[k] !== undefined;
+  const pick = (k) => (has(k) ? b[k] : cur[k]);
+
+  const timezone = pick("timezone");
+  if (!timezone) throw new HttpError(400, "INVALID_TIMEZONE");
+  try { new Intl.DateTimeFormat("en", { timeZone: timezone }); } catch { throw new HttpError(400, "INVALID_TIMEZONE"); }
+  const target = Number(pick("daily_target_hours")), max = Number(pick("max_session_hours"));
   if (!(target > 0 && target <= 24) || !(max >= 1 && max <= 24)) throw new HttpError(400, "INVALID_HOURS");
-  if (b.work_start && !HHMM.test(b.work_start)) throw new HttpError(400, "INVALID_WORK_START");
-  // Absent / null / empty-string grace falls back to the 15-minute default: an emptied
-  // UI field arrives as "" and Number("") === 0, which would silently make the policy
-  // "late one second after work_start". An explicit numeric 0 still means "no grace".
-  const rawGrace = b.late_grace_minutes;
+  const workStart = (has("work_start") ? b.work_start : cur.work_start) || null;
+  if (workStart && !HHMM.test(workStart)) throw new HttpError(400, "INVALID_WORK_START");
+  // Same-day hours only; zero-padded HH:MM compares correctly as strings.
+  const workEnd = (has("work_end") ? b.work_end : cur.work_end) || null;
+  if (workEnd && (!HHMM.test(workEnd) || (workStart && workEnd <= workStart))) {
+    throw new HttpError(400, "INVALID_WORK_END");
+  }
+  const workDays = has("work_days") ? b.work_days : (cur.work_days ?? 127);
+  if (!Number.isInteger(workDays) || workDays < 1 || workDays > 127) throw new HttpError(400, "INVALID_WORK_DAYS");
+  // null / "" grace means the 15-minute default: an emptied UI field arrives as "" and
+  // Number("") === 0, which would silently mean "late one second after work_start".
+  const rawGrace = pick("late_grace_minutes");
   const grace = rawGrace === undefined || rawGrace === null || rawGrace === "" ? 15 : Number(rawGrace);
   if (!Number.isInteger(grace) || grace < 0 || grace > 240) throw new HttpError(400, "INVALID_GRACE");
-  // PUT replaces the whole policy: an omitted field means the default, not "unchanged".
-  if (b.breaks_enabled !== undefined && typeof b.breaks_enabled !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
-  // A stale tab running the previous bundle sends only breaks_enabled; map it so saving
+  if (has("breaks_enabled") && typeof b.breaks_enabled !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
+  // A stale tab running a much older bundle sends only breaks_enabled; map it so saving
   // there keeps a flexible-break policy instead of silently switching breaks off.
-  const breakMode = b.break_mode ?? (b.breaks_enabled === true ? "flexible" : "off");
+  const breakMode = b.break_mode
+    ?? (has("breaks_enabled") ? (b.breaks_enabled ? "flexible" : "off") : (cur.break_mode ?? "off"));
   if (!BREAK_MODES.includes(breakMode)) throw new HttpError(400, "INVALID_BREAK_MODE");
-  const breakStart = b.break_start || null, breakEnd = b.break_end || null;
+  const breakStart = (has("break_start") ? b.break_start : cur.break_start) || null;
+  const breakEnd = (has("break_end") ? b.break_end : cur.break_end) || null;
   if ((breakStart && !HHMM.test(breakStart)) || (breakEnd && !HHMM.test(breakEnd))) {
     throw new HttpError(400, "INVALID_BREAK_WINDOW");
   }
-  // Same-day windows only; zero-padded HH:MM compares correctly as strings.
   if (breakMode === "fixed" && (!breakStart || !breakEnd || breakStart >= breakEnd)) {
     throw new HttpError(400, "INVALID_BREAK_WINDOW");
   }
-  const breakPaid = b.break_paid === undefined ? false : b.break_paid;
+  const breakPaid = has("break_paid") ? b.break_paid : Boolean(cur.break_paid);
   if (typeof breakPaid !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
-  const notePolicy = b.note_on_stop === undefined ? "off" : b.note_on_stop;
+  const notePolicy = pick("note_on_stop") ?? "off";
   if (!NOTE_POLICIES.includes(notePolicy)) throw new HttpError(400, "INVALID_NOTE_POLICY");
-  if (b.activity_monitoring !== undefined && typeof b.activity_monitoring !== "boolean") {
+  if (has("activity_monitoring") && typeof b.activity_monitoring !== "boolean") {
     throw new HttpError(400, "INVALID_ACTIVITY_MONITORING");
   }
-  const monitoring = b.activity_monitoring === true;
-  // Same empty-field rule as the grace: "" / null / absent mean the 30-minute default.
-  const rawIdle = b.idle_minutes;
+  const monitoring = has("activity_monitoring") ? b.activity_monitoring : Boolean(cur.activity_monitoring);
+  // Same empty-field rule as the grace: "" / null mean the 30-minute default.
+  const rawIdle = pick("idle_minutes");
   const idleMinutes = rawIdle === undefined || rawIdle === null || rawIdle === "" ? 30 : Number(rawIdle);
   if (!Number.isInteger(idleMinutes) || idleMinutes < 10 || idleMinutes > 240) {
     throw new HttpError(400, "INVALID_IDLE_MINUTES");
@@ -941,6 +956,7 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
                          activity_monitoring_since = IF(activity_monitoring = 0 AND :monitoring = 1,
                                                         :t, activity_monitoring_since),
                          timezone = :tz, daily_target_hours = :target, work_start = :ws,
+                         work_end = :we, work_days = :wd,
                          late_grace_minutes = :grace, max_session_hours = :max,
                          breaks_enabled = :breaksEnabled, break_mode = :breakMode,
                          break_start = :breakStart, break_end = :breakEnd, break_paid = :breakPaid,
@@ -948,7 +964,7 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
                          note_on_stop = :notePolicy, updated_at = :t
       WHERE location_id = :loc`,
     {
-      tz: b.timezone, target, ws: b.work_start ?? null, grace, max,
+      tz: timezone, target, ws: workStart, we: workEnd, wd: workDays, grace, max,
       // Kept in sync so code that still reads breaks_enabled behaves the same.
       breaksEnabled: breakMode === "flexible" ? 1 : 0, breakMode, breakStart, breakEnd,
       breakPaid: breakPaid ? 1 : 0, notePolicy, t: now(), loc,
