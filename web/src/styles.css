@@ -185,6 +185,7 @@ h3{margin:0; font-size:15px; font-weight:600}
 .alert-row{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 0; border-top:1px solid var(--line)}
 .alert-row .m{font-size:13px; color:var(--warn)}
 .alert-row .note{font-size:13px; color:var(--muted); margin-top:4px}
+.alerts h3{font-size:13px; font-weight:600; color:var(--muted); margin:14px 0 0}
 
 /* Approvals */
 .req{border:1px solid var(--line); border-radius:12px; padding:14px; display:flex; flex-direction:column}

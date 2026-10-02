@@ -970,12 +970,18 @@ if (!awAcceptsTestKey) {
     (await ncOpenFor(`${NCLOC}-u2`)).length === 0);
   await cleanupLocation(`${NCLOC}-x`);
 
+  const ncA1 = (await call(NC1, "GET", "/me/alerts")).body?.alerts?.[0];
+  check("the employee notes their alert before clocking in",
+    (await call(NC1, "POST", `/me/alerts/${ncA1?.id}/note`, { note: "رح ابلّش هلّق" })).status === 200);
   await call(NC1, "POST", "/session/start");
   check("clocking in resolves the employee's alert", (await ncOpenFor(`${NCLOC}-u1`)).length === 0);
   const ncResolved = ((await call(NCM, "GET", "/admin/alerts?status=resolved")).body?.alerts ?? [])
     .find((a) => a.user_id === `${NCLOC}-u1`);
   check("the resolved alert says it was resolved by clocking in",
     ncResolved?.status === "resolved" && ncResolved?.resolution === "clocked_in", `(${JSON.stringify(ncResolved)})`);
+  check("the resolved alert keeps the employee's note and has a resolved_at",
+    ncResolved?.employee_note === "رح ابلّش هلّق" && Number.isInteger(ncResolved?.resolved_at),
+    `(${JSON.stringify(ncResolved)})`);
   await call(NC1, "POST", "/session/stop");
 }
 await cleanupLocation(NCLOC);

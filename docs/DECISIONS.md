@@ -207,3 +207,15 @@ currently trigger a harmless rebuild.
   pass only looks 7 days back, so an edit of an older session left "—" for good.
 - **Rejected:** keeping the "covering" rule with a re-check after insert (still racy); a time window on
   the edit refill (summaries are kept forever); recomputing stored summaries when events arrive late.
+
+## 2026-10-02 — Dismiss does not stick; noted alerts stay visible after clock-in
+- **Decision:** a dismissed alert does not suppress later alerts — the next qualifying event opens a
+  new one (no code change). The manager's alerts panel also lists, read-only under "ملاحظات الموظفين",
+  alerts resolved by clocking in during the last 24 hours that carry an employee note
+  (`GET /admin/alerts?status=resolved`, rows now include `resolved_at`). The list order is
+  `from_at DESC, id DESC`; the session-summary pass takes the most recently ended sessions first.
+- **Reason:** an employee who writes a note and then clocks in resolves the alert, and the manager
+  would otherwise never see the explanation. Ordering the summary pass by `ended_at DESC` keeps new
+  sessions from starving behind older ones the no-events guard keeps refusing.
+- **Rejected:** suppressing alerts for the rest of the day after a dismiss (owner prefers every new
+  stretch of unclocked work to be raised); showing notes in the session detail (the alert has no session).

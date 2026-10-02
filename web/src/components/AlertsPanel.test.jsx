@@ -39,4 +39,58 @@ describe("AlertsPanel", () => {
     await waitFor(() => expect(api.post).toHaveBeenCalledWith("/admin/alerts/a1/dismiss"));
     await waitFor(() => expect(screen.queryByText("سارة")).not.toBeInTheDocument());
   });
+  describe("employee notes on resolved alerts", () => {
+    const now = at + 100000;
+    const openAlert = { id: "a1", user_id: "u1", name: "سارة", kind: "working_not_clocked_in", from_at: at };
+    const resolved = (over) => ({
+      id: "r1", user_id: "u2", name: "خالد", kind: "working_not_clocked_in", from_at: at, status: "resolved",
+      resolution: "clocked_in", employee_note: "رح ابلّش هلّق", resolved_at: now - 3600, ...over,
+    });
+    const apiWith = ({ open = [openAlert], resolvedList = [], resolvedFails = false } = {}) => ({
+      get: vi.fn(async (path) => {
+        if (path === "/admin/alerts?status=open") return { alerts: open, timezone: "Asia/Dubai", server_time: now };
+        if (path === "/admin/alerts?status=resolved") {
+          if (resolvedFails) throw new Error("boom");
+          return { alerts: resolvedList, timezone: "Asia/Dubai", server_time: now };
+        }
+        throw new Error(`unexpected ${path}`);
+      }),
+      post: vi.fn(),
+    });
+
+    it("shows a recently resolved alert's note read-only", async () => {
+      wrap(<AlertsPanel api={apiWith({ resolvedList: [resolved()] })} />);
+      expect(await screen.findByText("ملاحظات الموظفين")).toBeInTheDocument();
+      expect(screen.getByText("خالد")).toBeInTheDocument();
+      expect(screen.getByText("كان عم يشتغل بدون دوام من 09:05 · بلّش الدوام")).toBeInTheDocument();
+      expect(screen.getByText("رح ابلّش هلّق")).toBeInTheDocument();
+      // only the open alert (سارة) has a dismiss button
+      expect(screen.getAllByRole("button", { name: "تجاهل" })).toHaveLength(1);
+    });
+
+    it("hides resolved alerts without a note or older than 24 hours", async () => {
+      const list = [
+        resolved({ id: "r1", name: "بدون ملاحظة", employee_note: null }),
+        resolved({ id: "r2", name: "قديم", resolved_at: now - 25 * 3600 }),
+      ];
+      wrap(<AlertsPanel api={apiWith({ resolvedList: list })} />);
+      expect(await screen.findByText("سارة")).toBeInTheDocument();
+      expect(screen.queryByText("ملاحظات الموظفين")).not.toBeInTheDocument();
+      expect(screen.queryByText("بدون ملاحظة")).not.toBeInTheDocument();
+      expect(screen.queryByText("قديم")).not.toBeInTheDocument();
+    });
+
+    it("still shows open alerts when the resolved request fails", async () => {
+      wrap(<AlertsPanel api={apiWith({ resolvedFails: true })} />);
+      expect(await screen.findByText("سارة")).toBeInTheDocument();
+      expect(screen.queryByText("ملاحظات الموظفين")).not.toBeInTheDocument();
+    });
+
+    it("renders for notes alone, without a count badge", async () => {
+      const { container } = wrap(<AlertsPanel api={apiWith({ open: [], resolvedList: [resolved()] })} />);
+      expect(await screen.findByText("ملاحظات الموظفين")).toBeInTheDocument();
+      expect(screen.getByText("رح ابلّش هلّق")).toBeInTheDocument();
+      expect(container.querySelector(".count")).toBeNull();
+    });
+  });
 });

@@ -222,7 +222,8 @@ signed events also refresh it.)
 ### 5.4 Manager actions — `/admin/alerts`
 - `GET /admin/alerts?status=open` — list with employee name, kind, `from_at`, employee note.
 - `POST /admin/alerts/:id/dismiss` — open alert of this location → `dismissed`;
-  otherwise `404 ALERT_NOT_FOUND`.
+  otherwise `404 ALERT_NOT_FOUND`. A dismissed alert does not suppress later ones: the next
+  qualifying event opens a new alert (owner, 2026-10-02).
 - `GET /admin/live` gains, per open session, `last_activity_at` and `idle_sec` (NULL when
   monitoring is off or the outage guard applies), and per offline employee
   `active_without_session` (true while a not-clocked-in alert is open).
@@ -268,6 +269,10 @@ Every 15 minutes (timer) and lazily: `DELETE FROM activity_events WHERE occurred
   `unknown_active_users > 0`, "في نشاط بآخر 7 أيام من X مستخدمين ما فتحوا TimeClock بعد".
 - Dashboard: "تنبيهات النشاط" panel at the top, only when alerts are open, with count;
   each row: name, "عم يشتغل بدون دوام من 09:05", employee note if any, button "تجاهل".
+  Under the open rows, "ملاحظات الموظفين": a read-only list of alerts resolved by clocking in during
+  the last 24 hours that carry an employee note (name, "كان عم يشتغل بدون دوام من 09:05 · بلّش
+  الدوام", the note; no buttons). The panel also shows when only such notes exist (no count badge);
+  the count is the number of open alerts (owner, 2026-10-02).
 - Live floor: idle employees stay in "داخل الدوام" with a warning chip "بدون نشاط 35 د";
   working-without-session employees show "نشِط بدون دوام" in "غير متصل".
 - Session detail: columns "النشاط" (count or "—") and "أطول خمول" ("—" when not monitored).

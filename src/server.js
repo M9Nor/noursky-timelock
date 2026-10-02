@@ -364,6 +364,7 @@ async function summarizeClosedSessions(loc = null) {
         `SELECT id, user_id, started_at, ended_at FROM sessions
           WHERE location_id = :loc AND started_at >= :scanFrom AND ended_at IS NOT NULL
             AND activity_count IS NULL AND ended_at > :since AND ended_at > :recent
+          ORDER BY ended_at DESC
           LIMIT 50`,
         { loc: l, since, recent: t - 7 * 86400, scanFrom: t - 9 * 86400 }
       );
@@ -1085,13 +1086,13 @@ app.get("/admin/ghl-connection", authed, managerOnly, async (c) => {
 
 const ALERT_STATUSES = ["open", "resolved", "dismissed"];
 const ALERT_COLUMNS = `a.id, a.user_id, a.kind, a.from_at, a.to_at, a.status, a.resolution,
-  a.employee_note, a.employee_note_at, a.detected_at`;
+  a.employee_note, a.employee_note_at, a.detected_at, a.resolved_at`;
 /** BIGINT columns as plain numbers, so the UI never sees a string timestamp. */
 function alertRow(r) {
   return {
     ...r,
     from_at: Number(r.from_at), to_at: numOrNull(r.to_at), detected_at: Number(r.detected_at),
-    employee_note_at: numOrNull(r.employee_note_at),
+    employee_note_at: numOrNull(r.employee_note_at), resolved_at: numOrNull(r.resolved_at),
   };
 }
 
@@ -1104,7 +1105,7 @@ app.get("/admin/alerts", authed, managerOnly, async (c) => {
        FROM activity_alerts a
        LEFT JOIN employees e ON e.user_id = a.user_id AND e.location_id = a.location_id
       WHERE a.location_id = :loc AND a.status = :status
-      ORDER BY a.from_at DESC
+      ORDER BY a.from_at DESC, a.id DESC
       LIMIT 200`,
     { loc, status }
   )).map(alertRow);
