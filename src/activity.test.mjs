@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   ALL_DAYS, localWeekday, isWithinWorkHours, isFreshEvent, activeSeconds, lastActivityAt, idleSeconds, sessionSummary,
+  onBreakAt, idleAlertAt, isLateActivity,
 } from "./activity.js";
 
 const utc = (...a) => Date.UTC(...a) / 1000;
@@ -81,4 +82,37 @@ test("sessionSummary counts the monitored part only, with breaks removed from ga
     { activity_count: 0, last_activity_at: null, longest_idle_sec: 600 });
   assert.equal(sessionSummary({ startedAt: 0, endedAt: 1000, monitoringSince: null, eventTimes: [] }), null);
   assert.equal(sessionSummary({ startedAt: 0, endedAt: 1000, monitoringSince: 1000, eventTimes: [] }), null);
+});
+
+test("onBreakAt: inside a closed or running break, not at its end", () => {
+  assert.equal(onBreakAt([[100, 200]], 150), true);
+  assert.equal(onBreakAt([[100, 200]], 200), false);
+  assert.equal(onBreakAt([[100, null]], 5000), true);
+  assert.equal(onBreakAt([], 150), false);
+});
+
+test("idleAlertAt opens at the threshold, from the last activity", () => {
+  // started 0, last event 1000, threshold 10 min → opens at 1600, from 1000
+  assert.equal(idleAlertAt({ startedAt: 0, lastEventAt: 1000, now: 1599, idleMinutes: 10 }), null);
+  assert.equal(idleAlertAt({ startedAt: 0, lastEventAt: 1000, now: 1600, idleMinutes: 10 }), 1000);
+  // monitoring started later than the event: idle counts from the monitoring start
+  assert.equal(idleAlertAt({ startedAt: 0, monitoringSince: 2000, lastEventAt: 1000, now: 2600, idleMinutes: 10 }), 2000);
+  // a one-minute threshold
+  assert.equal(idleAlertAt({ startedAt: 0, now: 60, idleMinutes: 1 }), 0);
+});
+
+test("idleAlertAt: break time does not count, and nothing opens during a break", () => {
+  // 0..1200 with a 300 s break → 900 s idle < 1200 (20 min)
+  assert.equal(idleAlertAt({ startedAt: 0, now: 1200, breaks: [[100, 400]], idleMinutes: 20 }), null);
+  assert.equal(idleAlertAt({ startedAt: 0, now: 1500, breaks: [[100, 400]], idleMinutes: 20 }), 0);
+  // on a running break, or inside a fixed window right now
+  assert.equal(idleAlertAt({ startedAt: 0, now: 5000, breaks: [[4000, null]], idleMinutes: 1 }), null);
+  assert.equal(idleAlertAt({ startedAt: 0, now: 5000, breaks: [[4800, 5400]], idleMinutes: 1 }), null);
+});
+
+test("isLateActivity: an event before the stretch reached the threshold", () => {
+  assert.equal(isLateActivity({ fromAt: 1000, occurredAt: 1030, idleMinutes: 1 }), true);
+  assert.equal(isLateActivity({ fromAt: 1000, occurredAt: 1060, idleMinutes: 1 }), false);
+  // break time inside the gap does not count towards the threshold
+  assert.equal(isLateActivity({ fromAt: 0, occurredAt: 700, breaks: [[100, 400]], idleMinutes: 10 }), true);
 });
