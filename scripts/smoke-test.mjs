@@ -938,6 +938,33 @@ if (!awAcceptsTestKey) {
   check("the alert list reports the location timezone and server time",
     ncList.body?.timezone === "UTC" && Number.isInteger(ncList.body?.server_time));
 
+  const ncMine = await call(NC2, "GET", "/me/alerts");
+  const ncA2 = ncMine.body?.alerts?.[0];
+  check("an employee sees their own open alert",
+    ncMine.status === 200 && ncMine.body?.alerts?.length === 1 && ncA2?.user_id === `${NCLOC}-u2`
+      && ncMine.body?.timezone === "UTC",
+    `(${JSON.stringify(ncMine.body)})`);
+  check("an empty note → 400", (await call(NC2, "POST", `/me/alerts/${ncA2?.id}/note`, { note: "  " })).body?.error === "NOTE_REQUIRED");
+  check("a note over 300 characters → 400",
+    (await call(NC2, "POST", `/me/alerts/${ncA2?.id}/note`, { note: "x".repeat(301) })).body?.error === "NOTE_TOO_LONG");
+  check("an employee cannot note someone else's alert",
+    (await call(NC1, "POST", `/me/alerts/${ncA2?.id}/note`, { note: "مش إلي" })).body?.error === "ALERT_NOT_FOUND");
+  check("the employee's note is saved",
+    (await call(NC2, "POST", `/me/alerts/${ncA2?.id}/note`, { note: "كنت عم رد على زبون من الموبايل" })).status === 200);
+  check("the manager sees the employee's note",
+    (await ncOpenFor(`${NCLOC}-u2`))[0]?.employee_note === "كنت عم رد على زبون من الموبايل");
+  check("an employee cannot dismiss", (await call(NC2, "POST", `/admin/alerts/${ncA2?.id}/dismiss`)).status === 403);
+  const ncOther = await sso({ userId: `${NCLOC}-x-m1`, role: "admin", type: "account", activeLocation: `${NCLOC}-x`, userName: "مدير غريب", email: "ncx@x.com" });
+  check("another location's manager cannot dismiss it",
+    (await call(ncOther.body?.token, "POST", `/admin/alerts/${ncA2?.id}/dismiss`)).body?.error === "ALERT_NOT_FOUND");
+  check("the manager dismisses it", (await call(NCM, "POST", `/admin/alerts/${ncA2?.id}/dismiss`)).status === 200);
+  check("a dismissed alert leaves the open list and the employee's list",
+    (await ncOpenFor(`${NCLOC}-u2`)).length === 0 && (await call(NC2, "GET", "/me/alerts")).body?.alerts?.length === 0);
+  check("dismissing it again → 404", (await call(NCM, "POST", `/admin/alerts/${ncA2?.id}/dismiss`)).body?.error === "ALERT_NOT_FOUND");
+  check("a note on a dismissed alert → 404",
+    (await call(NC2, "POST", `/me/alerts/${ncA2?.id}/note`, { note: "متأخر" })).body?.error === "ALERT_NOT_FOUND");
+  await cleanupLocation(`${NCLOC}-x`);
+
   await call(NC1, "POST", "/session/start");
   check("clocking in resolves the employee's alert", (await ncOpenFor(`${NCLOC}-u1`)).length === 0);
   const ncResolved = ((await call(NCM, "GET", "/admin/alerts?status=resolved")).body?.alerts ?? [])

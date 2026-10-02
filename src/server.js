@@ -445,6 +445,35 @@ app.get("/me/sessions", authed, async (c) => {
   return c.json({ sessions, timezone: st?.timezone ?? "Asia/Riyadh" });
 });
 
+const ALERT_NOTE_MAX = 300;
+
+app.get("/me/alerts", authed, async (c) => {
+  const { uid, loc } = c.get("claims");
+  const alerts = (await q(
+    `SELECT ${ALERT_COLUMNS} FROM activity_alerts a
+      WHERE a.location_id = :loc AND a.user_id = :uid AND a.status = 'open'
+      ORDER BY a.from_at DESC`,
+    { loc, uid }
+  )).map(alertRow);
+  const st = await getSettings(loc);
+  return c.json({ alerts, timezone: st?.timezone ?? "Asia/Riyadh", server_time: now() });
+});
+
+app.post("/me/alerts/:id/note", authed, async (c) => {
+  const { uid, loc } = c.get("claims");
+  const body = (await c.req.json().catch(() => null)) ?? {};
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  if (!note) throw new HttpError(400, "NOTE_REQUIRED");
+  if (note.length > ALERT_NOTE_MAX) throw new HttpError(400, "NOTE_TOO_LONG");
+  const r = await q(
+    `UPDATE activity_alerts SET employee_note = :note, employee_note_at = :t
+      WHERE id = :id AND location_id = :loc AND user_id = :uid AND status = 'open'`,
+    { note, t: now(), id: c.req.param("id"), loc, uid }
+  );
+  if (!r.affectedRows) throw new HttpError(404, "ALERT_NOT_FOUND");
+  return c.json({ ok: true });
+});
+
 app.post("/session/start", authed, async (c) => {
   const { uid, loc } = c.get("claims");
   await autoCloseStale(loc);
@@ -922,6 +951,18 @@ app.get("/admin/alerts", authed, managerOnly, async (c) => {
   )).map(alertRow);
   const st = await getSettings(loc);
   return c.json({ alerts, timezone: st?.timezone ?? "Asia/Riyadh", server_time: now() });
+});
+
+app.post("/admin/alerts/:id/dismiss", authed, managerOnly, async (c) => {
+  const { loc, uid } = c.get("claims");
+  const r = await q(
+    `UPDATE activity_alerts
+        SET status = 'dismissed', resolution = 'dismissed', resolved_by = :uid, resolved_at = :t
+      WHERE id = :id AND location_id = :loc AND status = 'open'`,
+    { id: c.req.param("id"), loc, uid, t: now() }
+  );
+  if (!r.affectedRows) throw new HttpError(404, "ALERT_NOT_FOUND");
+  return c.json({ ok: true });
 });
 
 app.put("/admin/settings", authed, managerOnly, async (c) => {
