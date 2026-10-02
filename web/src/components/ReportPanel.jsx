@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import Button from "./Button.jsx";
 import Icon from "./Icon.jsx";
 import { useToast } from "./ToastContext.jsx";
-import { formatHours, formatLateness, formatStamp, formatBreak } from "../time.js";
+import { formatHours, formatLateness, formatStamp, formatBreak, formatIdle } from "../time.js";
 import SessionEditModal from "./SessionEditModal.jsx";
 
 export function todayRange() { const to = Math.floor(Date.now() / 1000); return { from: to - 86400, to }; }
@@ -111,7 +111,7 @@ export default function ReportPanel({ api }) {
           <div className="table-wrap"><table>
             <thead><tr>
               <th scope="col">البداية</th><th scope="col">النهاية</th>
-              <th scope="col">الاستراحة</th><th scope="col">التأخير</th>
+              <th scope="col">الاستراحة</th><th scope="col">التأخير</th><th scope="col">النشاط</th><th scope="col">أطول خمول</th>
               <th scope="col">الإغلاق</th><th scope="col">الملاحظة</th><th scope="col"></th>
             </tr></thead>
             <tbody>{detail.sessions.map((s) => (
@@ -120,6 +120,8 @@ export default function ReportPanel({ api }) {
                 <td className="ltr">{s.ended_at ? formatStamp(s.ended_at, detail.timezone) : "مفتوحة"}</td>
                 <td>{formatBreak(s.break_sec) || "—"}</td>
                 <td className="late">{formatLateness(s.late_by_sec)}</td>
+                <td className="num">{s.activity_count ?? "—"}</td>
+                <td>{formatIdle(s.longest_idle_sec)}</td>
                 <td>{s.closed_by ?? "—"}</td>
                 <td className="note">{s.note || "—"}</td>
                 <td><Button variant="ghost" size="sm" onClick={() => setEditing(s)}>تعديل</Button></td>

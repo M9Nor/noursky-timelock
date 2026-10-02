@@ -180,6 +180,11 @@ h3{margin:0; font-size:15px; font-weight:600}
 .person .m{font-size:12px; color:var(--muted)}
 .person .m.late{color:var(--neg); font-weight:600}
 .person .m.break{color:var(--warn); font-weight:600}
+.person .m.warn{color:var(--warn); font-weight:600}
+.alerts .panel-h .count{color:var(--warn)}
+.alert-row{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 0; border-top:1px solid var(--line)}
+.alert-row .m{font-size:13px; color:var(--warn)}
+.alert-row .note{font-size:13px; color:var(--muted); margin-top:4px}
 
 /* Approvals */
 .req{border:1px solid var(--line); border-radius:12px; padding:14px; display:flex; flex-direction:column}

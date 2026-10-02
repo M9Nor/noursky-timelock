@@ -123,4 +123,20 @@ describe("ReportPanel", () => {
     expect(screen.getByText("أنهيت عرض السعر")).toBeInTheDocument();
     expect(screen.getByText("الملاحظة")).toBeInTheDocument();
   });
+
+  it("shows each session's activity count and longest idle stretch", async () => {
+    const session = { started_at: 1000, ended_at: 4600, break_sec: 0, closed_by: "user", note: null, late_by_sec: null };
+    const api = makeApi({
+      sessions: [
+        { ...session, id: "s1", activity_count: 4, longest_idle_sec: 65 * 60 },
+        { ...session, id: "s2", activity_count: null, longest_idle_sec: null },
+      ],
+    });
+    wrap(<ReportPanel api={api} />);
+    fireEvent.click(await screen.findByText("أحمد"));
+    expect(await screen.findByRole("columnheader", { name: "النشاط" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "أطول خمول" })).toBeInTheDocument();
+    expect(screen.getByText("1 س 5 د")).toBeInTheDocument();
+    expect(screen.getByText("4")).toBeInTheDocument();
+  });
 });
