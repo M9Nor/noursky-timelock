@@ -4,11 +4,13 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `feature/bilingual` (Arabic + English, 7 commits ahead of `main` + the final-review fix commit, NOT pushed, NOT merged) — `main`: activity monitoring phases **A, B and C are live** (phase C merged `5226fb0`
-  and deployed 2026-10-02; verified on Innova: the idle alert reached manager and employee).
+- **Branch:** `main` — activity monitoring phases **A, B and C** and **Arabic + English** (merged
+  `147c41c`, migration 006 applied 2026-10-03) are all live. Marketplace **2.0.1** published 2026-10-03
+  (patch, reaches 2.x installs automatically): the GHL sidebar label is now always **"TimeClock"**
+  (Custom Page title; previously "الدوام"). English client guide `b63736d5…` in the owner's Claude Docs.
 - **Next — pilot period (owner, 2026-10-02):** clients try the app free for a first period; feedback
   decides pricing and what comes next. Per-client onboarding checklist and the client guide live in the
-  owner's Claude Docs (internal guide `ac3e1e8b…`, client guide `e5529e64…`). Per client: install 2.0.0,
+  owner's Claude Docs (internal guide `ac3e1e8b…`, client guide `e5529e64…`). Per client: install 2.0.1, choose the company language,
   set timezone (`Europe/Istanbul` for Turkey; default is `Asia/Riyadh`), working hours/days, target,
   breaks; monitoring off unless asked, idle 30–45 min to start; employees informed.
 - **Open before/at first clients:** test the Custom Page in the GHL mobile app (never tested); confirm
@@ -16,8 +18,7 @@ _(overwrite each update)_
   test — on WhatsApp-only clients keep monitoring off or check the first event). The second install is
   still on Marketplace 1.0.0 (update from that sub-account).
 - **Deferred:** "end at last activity" (spec §11); non-message activity events; "note sent" state.
-- **Bilingual (feature/bilingual):** migration 006 (`settings.locale`, `employees.locale`) is NOT yet applied in production — apply it in phpMyAdmin BEFORE pushing the code. Owner decides when to merge/push.
-- **Tests:** unit 53, frontend 150, smoke 210/0 locally (foreign-appId check skipped), 134/0 in production mode.
+- **Tests:** unit 53, frontend 154, smoke 210/0 locally (foreign-appId check skipped), 134/0 in production mode.
 
 ## In Progress
 - Nothing mid-flight. The frontend redesign (spec `docs/superpowers/specs/2026-09-19-frontend-redesign-design.md`,
