@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ToastProvider } from "./ToastContext.jsx";
+import { I18nProvider } from "../i18n.jsx";
 import ReportPanel from "./ReportPanel.jsx";
 
 const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
@@ -138,5 +139,9 @@ describe("ReportPanel", () => {
     expect(screen.getByRole("columnheader", { name: "أطول خمول" })).toBeInTheDocument();
     expect(screen.getByText("1 س 5 د")).toBeInTheDocument();
     expect(screen.getByText("4")).toBeInTheDocument();
+  });
+  it("shows English column headers inside an English provider", async () => {
+    render(<I18nProvider locale="en"><ToastProvider><ReportPanel api={makeApi()} /></ToastProvider></I18nProvider>);
+    expect(await screen.findByRole("columnheader", { name: "Late days" })).toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { I18nProvider, useI18n, translate } from "./i18n.jsx";
@@ -10,8 +10,13 @@ const ARABIC = /[؀-ۿ]/;
 // Each language's own name is written in that language in both dictionaries.
 const NATIVE_NAMES = new Set(["lang.switch", "settings.langAr"]);
 // Paths are relative to src/ and resolved from the web/ working directory (vitest runs there; import.meta.url is not a file: URL under jsdom).
-// Files whose user-visible text must come only from the dictionaries. Tasks 3–4 add theirs.
-const TRANSLATED_FILES = ["App.jsx", "components/TopBar.jsx", "components/EmployeeScreen.jsx", "components/MyHistory.jsx", "components/StopNoteDialog.jsx"];
+// Every component and App.jsx: user-visible text must come only from the dictionaries.
+const TRANSLATED_FILES = [
+  "App.jsx",
+  ...readdirSync(resolve(process.cwd(), "src", "components"))
+    .filter((f) => f.endsWith(".jsx") && !f.includes(".test."))
+    .map((f) => `components/${f}`),
+];
 
 describe("dictionaries", () => {
   it("have the same keys", () => { expect(Object.keys(en).sort()).toEqual(Object.keys(ar).sort()); });

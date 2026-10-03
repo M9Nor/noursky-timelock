@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ToastProvider } from "./ToastContext.jsx";
+import { I18nProvider } from "../i18n.jsx";
 import AlertsPanel from "./AlertsPanel.jsx";
 
 const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
@@ -136,5 +137,22 @@ describe("AlertsPanel", () => {
     wrap(<AlertsPanel api={api} />);
     await screen.findByText("سارة");
     expect(document.title).toBe("⚠️ الدوام");
+  });
+  it("words alerts in English inside an English provider", async () => {
+    const idleFrom = Date.UTC(2026, 9, 5, 7, 35) / 1000; // 11:35 in Dubai
+    const api = {
+      get: vi.fn(async () => ({
+        alerts: [
+          { id: "a1", user_id: "u1", name: "Sara", kind: "working_not_clocked_in", from_at: at },
+          { id: "a2", user_id: "u2", name: "Omar", kind: "idle", from_at: idleFrom, to_at: null },
+        ],
+        timezone: "Asia/Dubai",
+        server_time: idleFrom + 25 * 60,
+      })),
+      post: vi.fn(),
+    };
+    render(<I18nProvider locale="en"><ToastProvider><AlertsPanel api={api} /></ToastProvider></I18nProvider>);
+    expect(await screen.findByText("Working without clocking in since 09:05")).toBeInTheDocument();
+    expect(screen.getByText("No activity since 11:35 · 25 min")).toBeInTheDocument();
   });
 });
