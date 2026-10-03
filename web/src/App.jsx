@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createApi, ApiError } from "./api.js";
 import { ssoLogin, devLogin } from "./auth.js";
-import { I18nProvider, translate } from "./i18n.jsx";
+import { I18nProvider, translate, useI18n } from "./i18n.jsx";
 import EmployeeScreen from "./components/EmployeeScreen.jsx";
 import ManagerDashboard from "./components/ManagerDashboard.jsx";
 import { ToastProvider } from "./components/Toast.jsx";
@@ -13,6 +13,12 @@ const IS_DEV = import.meta.env.DEV;
 // GHL. Remove VITE_PREVIEW before real clients use the app.
 const IS_PREVIEW = import.meta.env.VITE_PREVIEW === "1";
 const SHOW_DEV_LOGIN = IS_DEV || IS_PREVIEW;
+
+// Rendered inside the provider so it follows the language switch.
+function SkipLink() {
+  const { t } = useI18n();
+  return <a className="skip" href="#main">{t("app.skip")}</a>;
+}
 
 export default function App() {
   const tokenRef = useRef(null);
@@ -86,7 +92,7 @@ export default function App() {
   return (
     <I18nProvider locale={user.locale} onChange={saveLocale}>
     <ToastProvider>
-      <a className="skip" href="#main">{tr("app.skip")}</a>
+      <SkipLink />
       <TopBar role={role} onRole={setRoleOverride} />
       <main id="main">
         {role === "manager" ? <ManagerDashboard api={api.current} /> : <EmployeeScreen api={api.current} user={user} />}

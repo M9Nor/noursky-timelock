@@ -32,4 +32,17 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /دخول كموظف/ }));
     expect(await screen.findByRole("button", { name: /بدء الدوام/ })).toBeInTheDocument();
   });
+
+  it("translates the skip link when the language is switched", async () => {
+    global.fetch.mockImplementation(async (path) => {
+      if (path === "/auth/dev-login") return { ok: true, status: 200, json: async () => ({ token: "T", user: { role: "employee", name: "موظف تجريبي", locale: "ar" } }) };
+      if (path.startsWith("/me/status")) return { ok: true, status: 200, json: async () => ({ open_session: null, worked_sec: 0, server_time: 1 }) };
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /دخول كموظف/ }));
+    expect(await screen.findByRole("link", { name: "الانتقال إلى المحتوى" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
+    expect(await screen.findByRole("link", { name: "Skip to content" })).toBeInTheDocument();
+  });
 });
