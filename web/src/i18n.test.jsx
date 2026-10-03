@@ -31,15 +31,15 @@ describe("dictionaries", () => {
 
 describe("translate", () => {
   it("fills {placeholders} and falls back to Arabic, then to the key", () => {
-    expect(translate("en", "test.hello", { name: "Sara" })).toBe("Hello, Sara");
-    expect(translate("ar", "test.hello", { name: "سارة" })).toBe("مرحباً، سارة");
+    expect(translate("en", "employee.helloName", { name: "Sara" })).toBe("Hello, Sara");
+    expect(translate("ar", "employee.helloName", { name: "سارة" })).toBe("مرحباً، سارة");
     expect(translate("en", "no.such.key")).toBe("no.such.key");
   });
 });
 
 function Probe() {
   const { locale, t, setLocale } = useI18n();
-  return <button onClick={() => setLocale(locale === "ar" ? "en" : "ar")}>{t("test.hello", { name: "x" })}</button>;
+  return <button onClick={() => setLocale(locale === "ar" ? "en" : "ar")}>{t("employee.helloName", { name: "x" })}</button>;
 }
 
 describe("I18nProvider", () => {
@@ -56,5 +56,17 @@ describe("I18nProvider", () => {
     expect(document.documentElement.dir).toBe("ltr");
     expect(document.documentElement.lang).toBe("en");
     expect(changes).toEqual(["en"]);
+  });
+  it("switches without reporting when persist is false", () => {
+    const changes = [];
+    function Quiet() {
+      const { locale, setLocale } = useI18n();
+      return <button onClick={() => setLocale("en", { persist: false })}>{locale}</button>;
+    }
+    render(<I18nProvider locale="ar" onChange={(l) => changes.push(l)}><Quiet /></I18nProvider>);
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByRole("button")).toHaveTextContent("en");
+    expect(document.documentElement.dir).toBe("ltr");
+    expect(changes).toEqual([]);
   });
 });

@@ -27,10 +27,11 @@ export function I18nProvider({ locale, onChange, children }) {
   const value = useMemo(() => ({
     locale: current,
     t: (k, v) => translate(current, k, v),
-    setLocale: (next) => {
+    // persist:false switches the screen only (e.g. a saved company default), without reporting a personal choice.
+    setLocale: (next, { persist = true } = {}) => {
       if (next !== "ar" && next !== "en") return;
       setCurrent(next);
-      onChange?.(next);
+      if (persist) onChange?.(next);
     },
   }), [current, onChange]);
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ToastProvider } from "./ToastContext.jsx";
 import SettingsPanel from "./SettingsPanel.jsx";
+import { I18nProvider } from "../i18n.jsx";
 
 const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
 
@@ -249,5 +250,23 @@ describe("SettingsPanel", () => {
     fireEvent.change(await screen.findByLabelText("لغة الشركة"), { target: { value: "en" } });
     fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
     await waitFor(() => expect(api.put.mock.calls[0][1].locale).toBe("en"));
+  });
+
+  it("switches this screen to the saved company language without touching the personal choice", async () => {
+    const onChange = vi.fn();
+    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? { ...BASE, locale: "ar" } : { installed: false })), put: vi.fn(async (_p, b) => ({ ...b })) };
+    render(<I18nProvider locale="ar" onChange={onChange}><ToastProvider><SettingsPanel api={api} /></ToastProvider></I18nProvider>);
+    fireEvent.change(await screen.findByLabelText("لغة الشركة"), { target: { value: "en" } });
+    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(document.documentElement.dir).toBe("ltr"));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(api.put).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the screen language when the company language is unchanged", async () => {
+    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? { ...BASE, locale: "ar" } : { installed: false })), put: vi.fn(async (_p, b) => ({ ...b })) };
+    render(<I18nProvider locale="ar"><ToastProvider><SettingsPanel api={api} /></ToastProvider></I18nProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(document.documentElement.dir).toBe("rtl");
   });
 });

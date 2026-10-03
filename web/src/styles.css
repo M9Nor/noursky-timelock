@@ -31,6 +31,7 @@ button,input,select,textarea{font:inherit; color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--pink); outline-offset:2px}
 .ltr{direction:ltr; unicode-bidi:isolate}
+td.ltr{text-align:match-parent}
 .muted{color:var(--muted)}
 .error{color:var(--neg)}
 .sr{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap}

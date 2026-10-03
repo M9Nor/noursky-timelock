@@ -10,6 +10,8 @@ export function todayRange() { const to = Math.floor(Date.now() / 1000); return 
 export function weekRange() { const to = Math.floor(Date.now() / 1000); return { from: to - 7 * 86400, to }; }
 export function monthRange() { const to = Math.floor(Date.now() / 1000); return { from: to - 30 * 86400, to }; }
 
+const CLOSED_BY = new Set(["user", "auto", "admin"]);
+
 const toDateInput = (sec) => new Date(sec * 1000).toISOString().slice(0, 10);
 const fromDateInput = (v, endOfDay) => Math.floor(new Date(v + (endOfDay ? "T23:59:59" : "T00:00:00")).getTime() / 1000);
 
@@ -21,6 +23,8 @@ function completionColor(pct) {
 
 export default function ReportPanel({ api }) {
   const { t, locale } = useI18n();
+  // Codes the server writes get a translated name; anything else shows as stored.
+  const closedByLabel = (code) => (CLOSED_BY.has(code) ? t(`report.closedBy.${code}`) : code);
   const [range, setRange] = useState(weekRange());
   const [preset, setPreset] = useState("week");
   const [report, setReport] = useState(null);
@@ -124,7 +128,7 @@ export default function ReportPanel({ api }) {
                 <td className="late">{formatLateness(s.late_by_sec, locale)}</td>
                 <td className="num">{s.activity_count ?? "—"}</td>
                 <td>{formatIdle(s.longest_idle_sec, locale)}</td>
-                <td>{s.closed_by ?? "—"}</td>
+                <td>{s.closed_by ? closedByLabel(s.closed_by) : "—"}</td>
                 <td className="note">{s.note || "—"}</td>
                 <td><Button variant="ghost" size="sm" onClick={() => setEditing(s)}>{t("report.edit")}</Button></td>
               </tr>

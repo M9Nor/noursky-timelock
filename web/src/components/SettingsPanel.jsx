@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Button from "./Button.jsx";
 import { useToast } from "./ToastContext.jsx";
 import { formatStamp } from "../time.js";
@@ -15,14 +15,15 @@ const SPECIFIC_ERRORS = new Set([
 ]);
 
 export default function SettingsPanel({ api }) {
-  const { t } = useI18n();
+  const { t, setLocale } = useI18n();
+  const loadedLocale = useRef(null); // the company language as last loaded/saved (not the unsaved form value)
   const [s, setS] = useState(null);
   const [error, setError] = useState("");
   const [conn, setConn] = useState(null);
   const [connFailed, setConnFailed] = useState(false);
   const toast = useToast();
 
-  useEffect(() => { api.get("/admin/settings").then(setS).catch(() => setError("err.generic")); }, []);
+  useEffect(() => { api.get("/admin/settings").then((r) => { loadedLocale.current = r.locale ?? "ar"; setS(r); }).catch(() => setError("err.generic")); }, []);
   // The connection status is informative only; a failure never blocks the settings form.
   useEffect(() => { api.get("/admin/ghl-connection").then(setConn).catch(() => setConnFailed(true)); }, []);
   if (!s && !error) return <div className="panel muted">{t("common.loading")}</div>;
@@ -68,6 +69,9 @@ export default function SettingsPanel({ api }) {
         locale: s.locale ?? "ar",
       });
       setS(saved); toast(t("settings.saved"));
+      // The company language is what this manager sees by default: switch now, but it is not a personal choice (no PUT /me/locale).
+      if (saved.locale && saved.locale !== loadedLocale.current) setLocale(saved.locale, { persist: false });
+      loadedLocale.current = saved.locale ?? loadedLocale.current;
     } catch (e) {
       setError(SPECIFIC_ERRORS.has(e.code) ? `err.${e.code}` : "err.generic");
     }

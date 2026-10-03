@@ -559,12 +559,19 @@ app.get("/health", async (c) => {
 
 /** Effective language of one user: personal choice, else the company's, else Arabic. */
 async function effectiveLocale(uid, loc) {
-  const [row] = await q(
-    `SELECT e.locale AS personal, s.locale AS company
-       FROM employees e LEFT JOIN settings s ON s.location_id = e.location_id
-      WHERE e.user_id = :uid AND e.location_id = :loc`,
-    { uid, loc }
-  );
+  let row;
+  try {
+    [row] = await q(
+      `SELECT e.locale AS personal, s.locale AS company
+         FROM employees e LEFT JOIN settings s ON s.location_id = e.location_id
+        WHERE e.user_id = :uid AND e.location_id = :loc`,
+      { uid, loc }
+    );
+  } catch (e) {
+    // A database without migration 006 has no locale columns; login must still work (Arabic).
+    if (e.code === "ER_BAD_FIELD_ERROR") return "ar";
+    throw e;
+  }
   return row?.personal ?? row?.company ?? "ar";
 }
 

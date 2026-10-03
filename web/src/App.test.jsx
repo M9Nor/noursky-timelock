@@ -44,5 +44,7 @@ describe("App", () => {
     expect(await screen.findByRole("link", { name: "الانتقال إلى المحتوى" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "English" }));
     expect(await screen.findByRole("link", { name: "Skip to content" })).toBeInTheDocument();
+    const put = global.fetch.mock.calls.find(([path]) => path === "/me/locale");
+    expect(put?.[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ locale: "en" }) });
   });
 });

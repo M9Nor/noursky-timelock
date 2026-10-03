@@ -4,7 +4,7 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `feature/bilingual` (Arabic + English, 6 commits ahead of `main`, NOT pushed, NOT merged) — `main`: activity monitoring phases **A, B and C are live** (phase C merged `5226fb0`
+- **Branch:** `feature/bilingual` (Arabic + English, 7 commits ahead of `main` + the final-review fix commit, NOT pushed, NOT merged) — `main`: activity monitoring phases **A, B and C are live** (phase C merged `5226fb0`
   and deployed 2026-10-02; verified on Innova: the idle alert reached manager and employee).
 - **Next — pilot period (owner, 2026-10-02):** clients try the app free for a first period; feedback
   decides pricing and what comes next. Per-client onboarding checklist and the client guide live in the
@@ -82,7 +82,9 @@ _(append-only, newest on top: date · summary · files · commit)_
   smoke 210/0 locally and 134/0 in production mode. Migration 006 pending in production; not
   pushed. · commits (oldest first): see `git log --oneline main..HEAD` (aefed36 backend + migration,
   7cda994 language module, 0b1296d direction/skip-link fixes, 950f88f employee screens,
-  5d041e6 manager screens), plus the docs commit. · files: migrations/006, schema.sql,
+  5d041e6 manager screens), plus the docs commit. Final review fixes: saving the company language
+  switches the manager's own screen (no personal override), English wording polish, closed-by
+  names translated, `effectiveLocale` tolerates a DB without migration 006 (frontend 154/0). · files: migrations/006, schema.sql,
   src/server.js, web/src/i18n.jsx, web/src/locales/**, web/**, CLAUDE.md, docs/**
 
 - **2026-10-02** · Activity monitoring **phase C** (idle alert) on `feature/activity-monitoring-c`
