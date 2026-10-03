@@ -31,6 +31,7 @@ button,input,select,textarea{font:inherit; color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--pink); outline-offset:2px}
 .ltr{direction:ltr; unicode-bidi:isolate}
+td.ltr{text-align:match-parent}
 .muted{color:var(--muted)}
 .error{color:var(--neg)}
 .sr{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap}
@@ -49,6 +50,7 @@ svg.i{width:20px; height:20px; flex:none; stroke:currentColor; fill:none; stroke
 .brand b{font-size:18px; font-weight:700; color:var(--accent); letter-spacing:-.2px}
 .brand span{font-size:14px; color:var(--muted); font-weight:500}
 .date-label{color:var(--muted); font-size:14px}
+.lang{margin-inline-start:auto}
 
 .seg{display:inline-flex; background:var(--sunken); border-radius:999px; padding:4px; gap:2px}
 .seg input{position:absolute; opacity:0; pointer-events:none}
@@ -111,7 +113,7 @@ h3{margin:0; font-size:15px; font-weight:600}
 .hello{font-size:15px; color:var(--muted)}
 .timer{
   font-size:clamp(56px, 9vw, 104px); font-weight:700; line-height:1; letter-spacing:-2px;
-  color:var(--ink); margin:14px 0 10px; direction:ltr; text-align:right;
+  color:var(--ink); margin:14px 0 10px; direction:ltr; text-align:match-parent;
 }
 .timer .sec{color:var(--muted); font-weight:500; font-size:.42em; letter-spacing:0}
 .hero-meta{display:flex; gap:28px; flex-wrap:wrap; font-size:14px; color:var(--muted)}
@@ -131,11 +133,13 @@ h3{margin:0; font-size:15px; font-weight:600}
 .seg-work,.seg-break{position:absolute; top:6px; bottom:6px; border-radius:6px}
 .seg-work{background:var(--accent)}
 .seg-work.open{background:linear-gradient(to left, var(--accent) 0 85%, color-mix(in srgb,var(--accent) 60%, transparent))}
+[dir="ltr"] .seg-work.open{background:linear-gradient(to right, color-mix(in srgb,var(--accent) 55%, transparent), var(--accent) 18%)}
 [dir="rtl"] .seg-work.open{background:linear-gradient(to left, color-mix(in srgb,var(--accent) 55%, transparent), var(--accent) 18%)}
 .seg-break{background:repeating-linear-gradient(-45deg,var(--break-a) 0 4px,var(--break-b) 4px 8px); border:1px solid var(--line)}
 .now{position:absolute; top:0; bottom:0; width:2px; background:var(--pink)}
 .ticks{position:relative; height:20px; margin-top:6px; font-size:12px; color:var(--muted)}
 .ticks span{position:absolute; transform:translateX(50%)}
+[dir="ltr"] .ticks span{transform:translateX(-50%)}
 
 /* Week bars */
 .bars{display:flex; align-items:flex-end; gap:14px; height:180px; position:relative; padding-top:8px}
@@ -162,7 +166,7 @@ h3{margin:0; font-size:15px; font-weight:600}
 .kpi{padding:18px 20px; border-inline-start:1px solid var(--line)}
 .kpi:first-child{border-inline-start:0}
 .kpi dt{font-size:14px; color:var(--muted)}
-.kpi dd{margin:4px 0 0; font-size:32px; font-weight:700; line-height:1.1; direction:ltr; text-align:right}
+.kpi dd{margin:4px 0 0; font-size:32px; font-weight:700; line-height:1.1; direction:ltr; text-align:match-parent}
 .kpi dd small{font-size:16px; color:var(--muted); font-weight:500}
 .kpi.pos dd{color:var(--pos)} .kpi.neg dd{color:var(--neg)} .kpi.warn dd{color:var(--warn)} .kpi.acc dd{color:var(--accent)}
 
@@ -201,7 +205,7 @@ h3{margin:0; font-size:15px; font-weight:600}
 .filters button{min-height:36px; padding:0 14px; border-radius:999px; border:1px solid var(--line); background:transparent; font-size:13px; font-weight:600; color:var(--muted)}
 .filters button[aria-pressed="true"]{background:var(--head); color:var(--head-ink); border-color:var(--head)}
 .search{position:relative}
-.search input{min-height:40px; width:220px; border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:0 38px 0 12px}
+.search input{min-height:40px; width:220px; border:1px solid var(--line); border-radius:10px; background:var(--panel); padding-block:0; padding-inline:38px 12px}
 .search svg{position:absolute; inset-inline-start:10px; top:50%; transform:translateY(-50%); color:var(--muted); width:18px; height:18px}
 .table-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:var(--r-sm)}
 table{width:100%; border-collapse:collapse; min-width:820px}
@@ -209,10 +213,10 @@ table{width:100%; border-collapse:collapse; min-width:820px}
    so it must not inherit the manager report's 820px minimum. */
 .my-history{grid-column:1/-1}
 .my-history table{min-width:380px}
-th{background:var(--head); color:var(--head-ink); font-size:13px; font-weight:600; text-align:right; padding:11px 14px; white-space:nowrap}
+th{background:var(--head); color:var(--head-ink); font-size:13px; font-weight:600; text-align:start; padding:11px 14px; white-space:nowrap}
 td{padding:11px 14px; border-top:1px solid var(--line); font-size:14px; white-space:nowrap}
 tbody tr:nth-child(even) td{background:var(--sunken)}
-td.num{direction:ltr; text-align:right; font-weight:600}
+td.num{direction:ltr; text-align:match-parent; font-weight:600}
 td.late{color:var(--neg); font-weight:600; white-space:nowrap}
 td.note{max-width:280px; white-space:normal; overflow-wrap:anywhere; color:var(--muted)}
 .who{display:flex; align-items:center; gap:10px}
@@ -223,7 +227,7 @@ td.note{max-width:280px; white-space:normal; overflow-wrap:anywhere; color:var(-
 .heat{display:grid; grid-template-columns:minmax(140px,1.4fr) repeat(5,minmax(56px,1fr)) minmax(72px,1fr); gap:4px; min-width:620px}
 .heat .hc{padding:8px 10px; border-radius:8px; font-size:13px; text-align:center; direction:ltr; font-weight:600}
 .heat .hh{font-size:12px; color:var(--muted); text-align:center; padding:4px}
-.heat .hn{font-size:13px; font-weight:600; padding:8px 4px; text-align:right; direction:rtl; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.heat .hn{font-size:13px; font-weight:600; padding:8px 4px; text-align:start; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .heat .total{background:transparent; border:1px solid var(--line)}
 .v-pos{color:var(--pos)} .v-warn{color:var(--warn)} .v-neg{color:var(--neg)}
 
@@ -250,16 +254,16 @@ dialog::backdrop{background:rgba(20,20,37,.5)}
 .overlay{position:fixed; inset:0; background:rgba(20,20,37,.5); display:grid; place-items:center; z-index:60; padding:16px}
 .overlay .dlg{background:var(--panel); border-radius:var(--r-lg); width:min(480px, 100%)}
 .summary{background:var(--sunken); border-radius:12px; padding:14px 16px; display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px}
-.summary strong{display:block; font-size:22px; direction:ltr; text-align:right}
+.summary strong{display:block; font-size:22px; direction:ltr; text-align:match-parent}
 .note{border-radius:10px; padding:10px 12px; font-size:14px; margin-bottom:14px}
 .note.warn{background:var(--warn-soft); color:var(--warn)}
 
 .toast{
-  position:fixed; inset-inline-start:50%; bottom:calc(24px + env(safe-area-inset-bottom,0px)); transform:translate(50%, 20px);
+  position:fixed; left:50%; bottom:calc(24px + env(safe-area-inset-bottom,0px)); transform:translate(-50%, 20px);
   background:var(--head); color:var(--head-ink); padding:12px 18px; border-radius:12px; font-weight:600; font-size:14px;
   opacity:0; transition:opacity .2s, transform .2s; pointer-events:none; z-index:60; display:flex; gap:8px; align-items:center;
 }
-.toast.show{opacity:1; transform:translate(50%, 0)}
+.toast.show{opacity:1; transform:translate(-50%, 0)}
 
 /* ============ Responsive ============ */
 @media (max-width: 1080px){

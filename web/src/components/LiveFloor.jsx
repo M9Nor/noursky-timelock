@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import KpiRow from "./KpiRow.jsx";
+import { useI18n } from "../i18n.jsx";
 import { formatDuration, formatIdle, serverOffset, nowWithOffset } from "../time.js";
 
-const initials = (n) => (n || "؟").trim().charAt(0);
-
 export default function LiveFloor({ api }) {
+  const { t, locale } = useI18n();
+  const initials = (n) => (n || t("live.unknownInitial")).trim().charAt(0);
   const [data, setData] = useState(null);
   const [, setTick] = useState(0);
   const offsetRef = useRef(0);
@@ -21,7 +22,7 @@ export default function LiveFloor({ api }) {
     return () => { clearInterval(poll); clearInterval(tick); };
   }, []);
 
-  if (!data) return <div className="panel muted">جارٍ التحميل…</div>;
+  if (!data) return <div className="panel muted">{t("common.loading")}</div>;
   const nowS = nowWithOffset(offsetRef.current);
   const fb = data.fixed_break;
   const inFixed = Boolean(fb && nowS >= fb.starts_at && nowS < fb.ends_at);
@@ -39,17 +40,17 @@ export default function LiveFloor({ api }) {
           <div style={{ minWidth: 0 }}>
             <div className="n">{p.name}</div>
             {live && (p.break_started_at
-              ? <div className="m break">استراحة · {formatDuration(nowS - p.break_started_at)}</div>
+              ? <div className="m break">{t("live.break", { dur: formatDuration(nowS - p.break_started_at) })}</div>
               : inFixed
-                ? <div className="m break">وقت الاستراحة</div>
+                ? <div className="m break">{t("live.breakTime")}</div>
                 : <div className="m">{formatDuration(nowS - p.started_at)}</div>)}
             {live && !p.break_started_at && !inFixed && isIdle(p) && (
-              <div className="m warn">بدون نشاط {formatIdle(idleNow(p))}</div>
+              <div className="m warn">{t("live.idle", { dur: formatIdle(idleNow(p), locale) })}</div>
             )}
-            {!live && p.active_without_session && <div className="m warn">نشِط بدون دوام</div>}
+            {!live && p.active_without_session && <div className="m warn">{t("live.activeNoSession")}</div>}
           </div>
         </div>
-      )) : <div className="hint" style={{ textAlign: "center", padding: "12px 0" }}>لا أحد</div>}
+      )) : <div className="hint" style={{ textAlign: "center", padding: "12px 0" }}>{t("live.none")}</div>}
     </div>
   );
 
@@ -57,10 +58,10 @@ export default function LiveFloor({ api }) {
     <>
       <KpiRow live={data} />
       <section className="panel">
-        <div className="panel-h"><h2>الفريق الآن</h2></div>
+        <div className="panel-h"><h2>{t("live.team")}</h2></div>
         <div className="floor">
-          {lane("داخل الدوام", working, true)}
-          {lane("غير متصل", offline, false)}
+          {lane(t("live.working"), working, true)}
+          {lane(t("live.offline"), offline, false)}
         </div>
       </section>
     </>

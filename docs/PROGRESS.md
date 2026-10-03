@@ -4,7 +4,7 @@ Living handoff log. Read this + `DECISIONS.md` at the start of every session.
 
 ## Current State
 _(overwrite each update)_
-- **Branch:** `main` — activity monitoring phases **A, B and C are live** (phase C merged `5226fb0`
+- **Branch:** `feature/bilingual` (Arabic + English, 7 commits ahead of `main` + the final-review fix commit, NOT pushed, NOT merged) — `main`: activity monitoring phases **A, B and C are live** (phase C merged `5226fb0`
   and deployed 2026-10-02; verified on Innova: the idle alert reached manager and employee).
 - **Next — pilot period (owner, 2026-10-02):** clients try the app free for a first period; feedback
   decides pricing and what comes next. Per-client onboarding checklist and the client guide live in the
@@ -16,7 +16,8 @@ _(overwrite each update)_
   test — on WhatsApp-only clients keep monitoring off or check the first event). The second install is
   still on Marketplace 1.0.0 (update from that sub-account).
 - **Deferred:** "end at last activity" (spec §11); non-message activity events; "note sent" state.
-- **Tests:** unit 53, frontend 135, smoke 198/0 locally.
+- **Bilingual (feature/bilingual):** migration 006 (`settings.locale`, `employees.locale`) is NOT yet applied in production — apply it in phpMyAdmin BEFORE pushing the code. Owner decides when to merge/push.
+- **Tests:** unit 53, frontend 150, smoke 210/0 locally (foreign-appId check skipped), 134/0 in production mode.
 
 ## In Progress
 - Nothing mid-flight. The frontend redesign (spec `docs/superpowers/specs/2026-09-19-frontend-redesign-design.md`,
@@ -70,6 +71,21 @@ _(overwrite each update)_
 
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
+
+- **2026-10-03** · **Arabic + English** on `feature/bilingual` (subagent-driven, plan
+  `docs/superpowers/plans/2026-10-03-bilingual.md`). Migration 006 (`settings.locale`,
+  `employees.locale`); login returns `user.locale`; `PUT /me/locale`; settings locale; bilingual
+  install pages by `Accept-Language`; home-made i18n (provider, `t()`, `locales/ar.js` + `en.js`,
+  guard tests incl. a source scan); English duration units; top-bar language button;
+  direction-neutral CSS; employee and manager screens fully translated; company-language select;
+  time pickers for work and break times (DECISIONS). Verified: unit 53/0, frontend 150/0, build ok,
+  smoke 210/0 locally and 134/0 in production mode. Migration 006 pending in production; not
+  pushed. · commits (oldest first): see `git log --oneline main..HEAD` (aefed36 backend + migration,
+  7cda994 language module, 0b1296d direction/skip-link fixes, 950f88f employee screens,
+  5d041e6 manager screens), plus the docs commit. Final review fixes: saving the company language
+  switches the manager's own screen (no personal override), English wording polish, closed-by
+  names translated, `effectiveLocale` tolerates a DB without migration 006 (frontend 154/0). · files: migrations/006, schema.sql,
+  src/server.js, web/src/i18n.jsx, web/src/locales/**, web/**, CLAUDE.md, docs/**
 
 - **2026-10-02** · Activity monitoring **phase C** (idle alert) on `feature/activity-monitoring-c`
   (subagent-driven). Idle alert to manager and employee after `idle_minutes` without activity;

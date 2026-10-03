@@ -6,14 +6,13 @@ import { formatClock, formatHours, formatIdle, formatTime, serverOffset, nowWith
 import MyHistory from "./MyHistory.jsx";
 import StopNoteDialog from "./StopNoteDialog.jsx";
 import { useAlertTitle } from "../alertTitle.js";
+import { useI18n } from "../i18n.jsx";
 
-const GENERIC_ERROR = "حدث خطأ، حاول مرة أخرى";
-// Specific, actionable messages for error codes the employee can act on directly,
+// Error state holds dictionary keys (not text) so a message follows a language switch.
+const GENERIC_ERROR = "err.generic";
+// Error codes the employee can act on directly get their own message (`err.<CODE>`)
 // instead of the generic banner. Any other code falls back to GENERIC_ERROR.
-const ERROR_MESSAGES = {
-  BREAKS_DISABLED: "الاستراحات غير مفعّلة",
-  NO_OPEN_BREAK: "لا توجد استراحة مفتوحة",
-};
+const SPECIFIC_ERRORS = new Set(["BREAKS_DISABLED", "NO_OPEN_BREAK"]);
 
 export default function EmployeeScreen({ api, user }) {
   const [status, setStatus] = useState(null);
@@ -31,6 +30,7 @@ export default function EmployeeScreen({ api, user }) {
   const [sendingNote, setSendingNote] = useState(false);
   const offsetRef = useRef(0);
   const toast = useToast();
+  const { t, locale } = useI18n();
 
   async function refresh() {
     const s = await api.get("/me/status");
@@ -116,7 +116,7 @@ export default function EmployeeScreen({ api, user }) {
         await refresh().catch(() => {});
         return false;
       }
-      const mapped = ERROR_MESSAGES[e.code];
+      const mapped = SPECIFIC_ERRORS.has(e.code) ? `err.${e.code}` : null;
       if (mapped) {
         if (dialog) setNoteError(mapped); else setError(mapped);
         // Resync so button state (e.g. the break button) catches up with the server.
@@ -131,13 +131,13 @@ export default function EmployeeScreen({ api, user }) {
   }
 
   function toggle() {
-    if (!status?.open_session) return run(() => api.post("/session/start"), "بدأ دوامك");
+    if (!status?.open_session) return run(() => api.post("/session/start"), t("employee.toastStarted"));
     if (policy.note_on_stop !== "off") { setNoteError(""); setAskNote(true); return undefined; }
-    return run(() => api.post("/session/stop"), "انتهى دوامك");
+    return run(() => api.post("/session/stop"), t("employee.toastStopped"));
   }
 
   async function stopWithNote(note) {
-    const ok = await run(() => api.post("/session/stop", note ? { note } : {}), "انتهى دوامك", { dialog: true });
+    const ok = await run(() => api.post("/session/stop", note ? { note } : {}), t("employee.toastStopped"), { dialog: true });
     if (ok) setAskNote(false);
   }
 
@@ -149,9 +149,9 @@ export default function EmployeeScreen({ api, user }) {
     try {
       await api.post(`/me/alerts/${id}/note`, { note });
       setAlertNote("");
-      toast("وصلت ملاحظتك للمدير");
+      toast(t("employee.noteSent"));
     } catch (e) {
-      setAlertNoteError(e.code === "NOTE_TOO_LONG" ? "الملاحظة طويلة جداً" : GENERIC_ERROR);
+      setAlertNoteError(e.code === "NOTE_TOO_LONG" ? "err.NOTE_TOO_LONG" : GENERIC_ERROR);
     } finally {
       setSendingNote(false);
     }
@@ -159,8 +159,8 @@ export default function EmployeeScreen({ api, user }) {
 
   function toggleBreak() {
     return status?.open_break
-      ? run(() => api.post("/session/break/stop"), "انتهت الاستراحة")
-      : run(() => api.post("/session/break/start"), "بدأت الاستراحة");
+      ? run(() => api.post("/session/break/stop"), t("employee.toastBreakEnded"))
+      : run(() => api.post("/session/break/start"), t("employee.toastBreakStarted"));
   }
 
   // Computed before the loading early-return so hook order never changes between renders.
@@ -169,27 +169,27 @@ export default function EmployeeScreen({ api, user }) {
   const idle = open ? alerts.list.find((a) => a.kind === "idle" && a.to_at == null) : null;
   useAlertTitle(Boolean(nci || idle));
 
-  if (!status && !error) return <div className="panel muted">جارٍ التحميل…</div>;
+  if (!status && !error) return <div className="panel muted">{t("employee.loading")}</div>;
 
   const { sessionSec, todaySec, onBreak, inFixed } = liveTotals(status, nowWithOffset(offsetRef.current));
   const clock = formatClock(sessionSec);
   const remain = Math.max(0, targetSec - todaySec);
   const pct = Math.min(100, (todaySec / targetSec) * 100);
   const name = user?.name || "";
-  const [chipClass, chipText] = onBreak ? ["break", "في استراحة"]
-    : inFixed ? ["break", "وقت الاستراحة"]
-    : open ? ["work", "داخل الدوام"] : ["off", "لم يسجّل الدخول"];
+  const [chipClass, chipText] = onBreak ? ["break", t("employee.chipBreak")]
+    : inFixed ? ["break", t("employee.chipBreakTime")]
+    : open ? ["work", t("employee.chipWork")] : ["off", t("employee.chipOff")];
   // An employee already on a break can always end it, even if the mode changed since.
   const showBreak = open && (policy.break_mode === "flexible" || onBreak);
 
   const noteBox = (id) => (
     <>
       <div className="field">
-        <label htmlFor="alert-note">ملاحظة للمدير</label>
+        <label htmlFor="alert-note">{t("employee.noteLabel")}</label>
         <textarea id="alert-note" maxLength={300} value={alertNote} onChange={(e) => setAlertNote(e.target.value)} />
-        {alertNoteError && <span className="err">{alertNoteError}</span>}
+        {alertNoteError && <span className="err">{t(alertNoteError)}</span>}
       </div>
-      <Button variant="ghost" size="sm" disabled={!alertNote.trim() || sendingNote} onClick={() => sendAlertNote(id)}>إرسال الملاحظة</Button>
+      <Button variant="ghost" size="sm" disabled={!alertNote.trim() || sendingNote} onClick={() => sendAlertNote(id)}>{t("employee.noteSend")}</Button>
     </>
   );
 
@@ -198,30 +198,30 @@ export default function EmployeeScreen({ api, user }) {
       <div className="hero">
         <div>
           <div className="hero-top">
-            <span className="hello">مرحباً{name ? `، ${name}` : ""}</span>
+            <span className="hello">{name ? t("employee.helloName", { name }) : t("employee.hello")}</span>
             <span className={`chip ${chipClass}`}>{chipText}</span>
           </div>
           <div className="timer" aria-live="off">{clock.h}:{clock.mm}<span className="sec">:{clock.ss}</span></div>
           <div className="hero-meta">
-            <div>ساعات اليوم المطلوبة<strong className="ltr">{formatHours(targetSec)}</strong></div>
-            <div>المتبقي<strong className="ltr">{remain > 0 ? formatHours(remain) : "اكتملت"}</strong></div>
-            <div>مجموع اليوم<strong className="ltr">{formatHours(todaySec)}</strong></div>
+            <div>{t("employee.target")}<strong className="ltr">{formatHours(targetSec)}</strong></div>
+            <div>{t("employee.remaining")}<strong className="ltr">{remain > 0 ? formatHours(remain) : t("employee.done")}</strong></div>
+            <div>{t("employee.todayTotal")}<strong className="ltr">{formatHours(todaySec)}</strong></div>
           </div>
           <div className="goal" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)}>
             <i style={{ width: pct + "%" }} />
           </div>
           {policy.break_mode === "fixed" && policy.break_start && policy.break_end && (
-            <p className="hint">الاستراحة <span className="ltr">{policy.break_start}–{policy.break_end}</span> · {policy.break_paid ? "مدفوعة" : "غير مدفوعة"}</p>
+            <p className="hint">{t("employee.breakWindow")} <span className="ltr">{policy.break_start}–{policy.break_end}</span> · {policy.break_paid ? t("employee.breakPaid") : t("employee.breakUnpaid")}</p>
           )}
-          {status?.activity_monitoring && <p className="hint">مراقبة النشاط مفعّلة</p>}
+          {status?.activity_monitoring && <p className="hint">{t("employee.monitoring")}</p>}
         </div>
         <div className="actions">
           <Button onClick={toggle} loading={loading} variant={open ? "danger" : "primary"} size="lg">
-            <Icon name={open ? "stop" : "play"} />{open ? "إنهاء الدوام" : "بدء الدوام"}
+            <Icon name={open ? "stop" : "play"} />{open ? t("employee.clockOut") : t("employee.clockIn")}
           </Button>
           {showBreak && (
             <Button onClick={toggleBreak} loading={loading} variant="ghost" size="lg">
-              <Icon name={onBreak ? "play" : "pause"} />{onBreak ? "إنهاء الاستراحة" : "استراحة"}
+              <Icon name={onBreak ? "play" : "pause"} />{onBreak ? t("employee.breakEnd") : t("employee.breakStart")}
             </Button>
           )}
         </div>
@@ -229,9 +229,9 @@ export default function EmployeeScreen({ api, user }) {
 
       {nci && (
         <section className="panel notice" role="status">
-          <p>مبيّن إنك عم تشتغل من {formatTime(nci.from_at, alerts.timezone)}. بتبلّش الدوام؟</p>
+          <p>{t("employee.notClockedInBanner", { time: formatTime(nci.from_at, alerts.timezone) })}</p>
           <div className="actions">
-            <Button onClick={toggle} loading={loading} size="lg"><Icon name="play" />بدء الدوام</Button>
+            <Button onClick={toggle} loading={loading} size="lg"><Icon name="play" />{t("employee.clockIn")}</Button>
           </div>
           {noteBox(nci.id)}
         </section>
@@ -239,24 +239,27 @@ export default function EmployeeScreen({ api, user }) {
 
       {idle && (
         <section className="panel notice" role="status">
-          <p>ما في نشاط من {formatTime(idle.from_at, alerts.timezone)} ({formatIdle(Math.max(0, (alerts.serverTime ?? idle.from_at) - idle.from_at))})، والمدير رح يشوفها. إذا عم تشتغل اكتبله شو عم تعمل.</p>
+          <p>{t("employee.idleBanner", {
+            time: formatTime(idle.from_at, alerts.timezone),
+            dur: formatIdle(Math.max(0, (alerts.serverTime ?? idle.from_at) - idle.from_at), locale),
+          })}</p>
           {noteBox(idle.id)}
         </section>
       )}
 
       <section className="panel">
-        <div className="panel-h"><h2>ساعاتي هذا الأسبوع</h2></div>
-        <p className="hero-meta"><span>المجموع<strong className="ltr">{formatHours(weekSec)}</strong></span></p>
+        <div className="panel-h"><h2>{t("employee.weekTitle")}</h2></div>
+        <p className="hero-meta"><span>{t("employee.weekTotal")}<strong className="ltr">{formatHours(weekSec)}</strong></span></p>
       </section>
 
       <MyHistory api={api} />
 
       {askNote && (
-        <StopNoteDialog required={policy.note_on_stop === "required"} loading={loading} error={noteError}
+        <StopNoteDialog required={policy.note_on_stop === "required"} loading={loading} error={noteError ? t(noteError) : ""}
           onConfirm={stopWithNote} onCancel={() => { setAskNote(false); setNoteError(""); }} />
       )}
 
-      {error && <div className="panel error">{error}</div>}
+      {error && <div className="panel error">{t(error)}</div>}
     </div>
   );
 }

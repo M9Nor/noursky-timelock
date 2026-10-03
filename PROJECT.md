@@ -182,6 +182,7 @@ role === "admin"  أو  type === "agency"   →  manager
 |---|---|---|---|
 | `location_id` | VARCHAR(64) PK | | |
 | `timezone` | VARCHAR(64) | `Asia/Riyadh` | IANA timezone |
+| `locale` | ENUM(`ar`,`en`) | `ar` | لغة الشركة (migration 006). لغة كل موظف بتتبعها إلا إذا اختار لغة خاصة فيه (`employees.locale`) |
 | `daily_target_hours` | DECIMAL(4,2) | 8 | |
 | `work_start` | CHAR(5) NULL | `09:00` | أول وقت العمل الرسمي. `NULL` = التأخير معطّل. لو محدد، أي جلسة أول جلسة بيومها المحلي وبلّشت بعد `work_start + late_grace_minutes` بتنعتبر متأخرة (شوف `/admin/report`، §5.1) |
 | `work_end` | CHAR(5) NULL | `NULL` | نهاية الدوام `HH:MM` بتوقيت الحساب، لازم تكون بعد `work_start` (نفس اليوم). `NULL` = ما في نهاية دوام محددة |
@@ -207,6 +208,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | `user_id` + `location_id` | PK مركّب (نفس الشخص ممكن يكون بأكتر من Sub-Account) |
 | `name`, `email` | بيتحدثوا مع كل SSO |
 | `role` | `manager` / `employee` — بيتحدث مع كل SSO |
+| `locale` | `ar` / `en` / `NULL` — اللغة الشخصية (migration 006). `NULL` = بيتبع لغة الشركة. ما بيتغيّر مع SSO، بس عبر `PUT /me/locale`. اللغة الفعلية = الشخصية، وإلا لغة الشركة، وإلا `ar` |
 | `is_active` | للتعطيل لاحقاً بدون حذف |
 
 ### `sessions`
@@ -268,7 +270,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | Method | Path | الوصف |
 |---|---|---|
 | GET | `/health` | بيفحص الاتصال بالداتابيز → `{ ok, time }` |
-| POST | `/auth/sso` | Body: `{ encryptedData }` → `{ token, user: { uid, loc, role, name, email } }` |
+| POST | `/auth/sso` | Body: `{ encryptedData }` → `{ token, user: { uid, loc, role, name, email, locale } }` — `locale` = اللغة الفعلية للمستخدم (`ar` أو `en`) |
 
 ### الموظف
 
@@ -276,6 +278,7 @@ role === "admin"  أو  type === "agency"   →  manager
 |---|---|---|
 | GET | `/me/status?since=` | `{ open_session: {id, started_at, break_sec} \| null, open_break: {id, started_at} \| null, worked_sec, fixed_break: {starts_at, ends_at, paid} \| null, day_ends_at, activity_monitoring, server_time }`. `activity_monitoring` = هل مراقبة النشاط شغالة بهالحساب. `worked_sec` بدون الاستراحات. `since` افتراضياً **بداية اليوم بتوقيت الحساب** (نص الليل المحلي)، مش آخر 24 ساعة. `day_ends_at` = نص الليل الجاي بتوقيت الحساب (UNIX seconds)، والواجهة بترجع تجيب الأرقام عنده. `fixed_break` = نافذة اليوم إذا `break_mode = fixed` (و`null` إذا نافذة اليوم بلّشت قبل `break_policy_since`)؛ وإذا الجلسة المفتوحة عندها صف `fixed` منسجل اليوم، بيرجع هاد الصف (`paid: false`) لأنه هو اللي عم ينخصم فعلياً |
 | GET | `/me/settings` | `{ daily_target_hours, timezone, work_start, note_on_stop, break_mode, break_start, break_end, break_paid, breaks_enabled }` — `breaks_enabled` قديم (legacy)، متزامن مع `break_mode = 'flexible'` |
+| PUT | `/me/locale` | Body: `{ locale: "ar" \| "en" \| null }` — اللغة الشخصية؛ `null` = اتّبع لغة الشركة → `{ locale }` (اللغة الفعلية بعد الحفظ) · `400 INVALID_LOCALE` |
 | POST | `/session/start` | `201 { id, started_at }` · `409 SESSION_ALREADY_OPEN` · بيسكّر تنبيه «عم يشتغل بدون دوام» المفتوح (`resolution = clocked_in`) |
 | POST | `/session/stop` | Body اختياري: `{ note }` (حد أقصى 500 حرف). `200 { id, started_at, ended_at, duration_sec, break_sec, note }` — `duration_sec` المدة الكاملة، ووقت العمل = `duration_sec − break_sec`. إذا في استراحة مفتوحة بتسكّر معها. الملاحظة بتنحفظ بس إذا سياسة `note_on_stop` مش `off` · `400 NOTE_REQUIRED` · `400 NOTE_TOO_LONG` · `409 NO_OPEN_SESSION` |
 | POST | `/session/break/start` | `201 { id, session_id, started_at }` · `403 BREAKS_DISABLED` · `409 NO_OPEN_SESSION` · `409 BREAK_ALREADY_OPEN` — مسموح بس لما `break_mode = flexible` |
@@ -296,7 +299,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | GET | `/admin/ghl-connection` | حالة الربط مع GHL لهالحساب: `{ installed, has_activity_scope, last_event_at, events_24h, unknown_active_users }`. `unknown_active_users` = مستخدمين إلهم نشاط بآخر 7 أيام وما فتحوا TimeClock |
 | GET | `/admin/alerts?status=` | تنبيهات النشاط: `status` = `open` (افتراضي) أو `resolved` أو `dismissed` → `{ alerts: [{ id, user_id, session_id, name, kind, from_at, to_at, status, resolution, employee_note, employee_note_at, detected_at, resolved_at }], timezone, server_time }` (الأحدث أول بحسب `from_at` ثم `id`، حد أقصى 200؛ `resolved_at` فاضي للتنبيه المفتوح؛ `kind` ممكن يكون `idle`: `from_at` = آخر نشاط، `to_at` = وقت رجوع النشاط أو نهاية الجلسة، و`null` إذا لسا جاري) · `400 INVALID_STATUS` |
 | POST | `/admin/alerts/:id/dismiss` | تجاهل تنبيه مفتوح → `{ ok: true }` · `404 ALERT_NOT_FOUND` |
-| PUT | `/admin/settings` | Body: `{ timezone, daily_target_hours, max_session_hours, work_start, work_end (HH:MM أو null، لازم بعد work_start), work_days (1–127), late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid, activity_monitoring (boolean), idle_minutes (1–240، افتراضي 30) }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص من الـ body بيضل متل ما هو (`null` أو `""` = فاضي أو القيمة الافتراضية). قبل الحفظ بيسجّل النوافذ الثابتة اللي بلّشت تحت السياسة الحالية، وإذا تغيّر `break_mode`/`break_start`/`break_end`/`break_paid` بيصير `break_policy_since = now`. وتفعيل المراقبة بيسجّل `activity_monitoring_since = now` |
+| PUT | `/admin/settings` | Body: `{ timezone, locale ("ar" أو "en"؛ الغايب = بيضل متل ما هو، و`null` = `ar`), daily_target_hours, max_session_hours, work_start, work_end (HH:MM أو null، لازم بعد work_start), work_days (1–127), late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid, activity_monitoring (boolean), idle_minutes (1–240، افتراضي 30) }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص من الـ body بيضل متل ما هو (`null` أو `""` = فاضي أو القيمة الافتراضية). قبل الحفظ بيسجّل النوافذ الثابتة اللي بلّشت تحت السياسة الحالية، وإذا تغيّر `break_mode`/`break_start`/`break_end`/`break_paid` بيصير `break_policy_since = now`. وتفعيل المراقبة بيسجّل `activity_monitoring_since = now` |
 
 كل دقيقة (وقبل `/admin/live` و`/admin/alerts` و`/me/alerts`) بيفحص السيرفر الجلسات المفتوحة ويفتح تنبيه `idle` إذا عدّى حد الخمول بلا نشاط (بدون الاستراحات، وبشرط وصل حدث للموقع بآخر 24 ساعة).
 
@@ -305,7 +308,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | Method | Path | الوصف |
 |---|---|---|
 | POST | `/webhooks/events` | أحداث GHL. التحقق **بس** بالتوقيع `X-GHL-Signature` (Ed25519، المفتاح العام تبع GHL). توقيع غلط → `401 WEBHOOK_BAD_SIGNATURE` (بينكتب سطر تحذير بدون محتوى، مرة بالدقيقة بالكثير). التوقيع بيثبت إنه من GHL مش إنه لتطبيقنا: GHL بتوقّع كل التطبيقات بنفس المفتاح، فإذا `GHL_APP_ID` مضبوط بيتجاهل (200 بدون كتابة) أي `INSTALL`/`UNINSTALL` `appId` تبعه مختلف أو ناقص. مفتاح الاختبار بينقبل بس لما `NODE_ENV` = `development` أو `test`. أي حدث موقّع صح بيرجع `200` (انخزّن أو انتجاهل) لحتى GHL ما يعيد الإرسال. `INSTALL`/`UNINSTALL` بيحدّثوا `ghl_installs`؛ `OutboundMessage` بينخزّن كـ `activity_events` (بيانات وصفية بس) إذا `activity_monitoring = 1`، ومرة وحدة لكل `messageId` (وإذا ما في، لكل `webhookId`). إذا الحدث فيه `userId` لموظف (`role = employee`) فتح TimeClock قبل، وصار جوّا ساعات الدوام (`work_start`…`work_end`، أيام `work_days`، بتوقيت الحساب)، وعمره أقل من 6 ساعات، وما عنده جلسة مفتوحة ولا جلسة انتهت بعد وقت الحدث (التسليم المتأخر أو المكرّر ما بيفتح تنبيه قديم) → بينفتح تنبيه `working_not_clocked_in` (واحد مفتوح بالكثير لكل موظف، بجملة SQL وحدة)؛ التسليم المكرّر (ما انخزّن) ما بيفتح شي. الحدث المحسوب بيسكّر فترة الخمول الجارية لهالموظف (`to_at`)، وإذا الفترة ما وصلت للحد بتنحل `late_activity`. الحدث اللي بيوصل بعد ما انتهت الفترة (بحدث أحدث أو بنهاية الجلسة) وتاريخه جوّاها بيقصّرها بنفس الطريقة، وبينحل `late_activity` إذا الباقي أقل من الحد. أكبر من 256KB → `413 PAYLOAD_TOO_LARGE` |
-| GET | `/oauth/callback?code=` | رابط الرجوع بعد تثبيت التطبيق. بيبدّل الكود بتوكن من `services.leadconnectorhq.com/oauth/token` وبيخزّنه **مشفّر** (AES-256-GCM بـ `TOKEN_ENC_KEY`) بـ `ghl_installs`. بيرجّع صفحة عربية: `200` نجاح، `400` بدون كود، `503` السيرفر مش مُعدّ، `502` GHL رفض الكود، `504` ما قدرنا نوصل لـ GHL (مهلة 10 ثواني) |
+| GET | `/oauth/callback?code=` | رابط الرجوع بعد تثبيت التطبيق. بيبدّل الكود بتوكن من `services.leadconnectorhq.com/oauth/token` وبيخزّنه **مشفّر** (AES-256-GCM بـ `TOKEN_ENC_KEY`) بـ `ghl_installs`. بيرجّع صفحة بلغة المتصفح (`Accept-Language`: عربي إذا بدأ بـ `ar`، وإلا إنجليزي): `200` نجاح، `400` بدون كود، `503` السيرفر مش مُعدّ، `502` GHL رفض الكود، `504` ما قدرنا نوصل لـ GHL (مهلة 10 ثواني) |
 
 ### رموز الأخطاء
 
@@ -340,6 +343,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | `INVALID_IDLE_MINUTES` | 400 | حد الخمول مش رقم صحيح بين 1 و240 | حد الخمول لازم يكون بين 1 و240 دقيقة |
 | `INVALID_WORK_END` | 400 | نهاية الدوام مش `HH:MM` أو مش بعد البداية | نهاية الدوام غير صحيحة (لازم تكون بعد البداية) |
 | `INVALID_WORK_DAYS` | 400 | أيام الدوام مش رقم صحيح بين 1 و127 | اختار يوم دوام واحد على الأقل |
+| `INVALID_LOCALE` | 400 | اللغة مش `ar` أو `en` | اللغة غير صحيحة |
 | `INVALID_STATUS` | 400 | `status` مش `open`/`resolved`/`dismissed` | — |
 | `INVALID_ACTIVITY_MONITORING` | 400 | `activity_monitoring` مش boolean | إعداد مراقبة النشاط غير صحيح |
 | `WEBHOOK_BAD_SIGNATURE` | 401 | حدث بدون توقيع GHL صحيح | — (مش للواجهة) |

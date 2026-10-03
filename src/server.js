@@ -163,6 +163,7 @@ async function getSettings(loc) {
 }
 
 const NOTE_POLICIES = ["off", "optional", "required"];
+const LOCALES = ["ar", "en"];
 const BREAK_MODES = ["off", "fixed", "flexible"];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -556,6 +557,24 @@ app.get("/health", async (c) => {
   return c.json({ ok: true, time: now() });
 });
 
+/** Effective language of one user: personal choice, else the company's, else Arabic. */
+async function effectiveLocale(uid, loc) {
+  let row;
+  try {
+    [row] = await q(
+      `SELECT e.locale AS personal, s.locale AS company
+         FROM employees e LEFT JOIN settings s ON s.location_id = e.location_id
+        WHERE e.user_id = :uid AND e.location_id = :loc`,
+      { uid, loc }
+    );
+  } catch (e) {
+    // A database without migration 006 has no locale columns; login must still work (Arabic).
+    if (e.code === "ER_BAD_FIELD_ERROR") return "ar";
+    throw e;
+  }
+  return row?.personal ?? row?.company ?? "ar";
+}
+
 /** Upsert the employee, ensure a settings row, and mint our HMAC token. */
 async function issueSession({ userId, loc, role, name, email }) {
   const t = now();
@@ -567,9 +586,10 @@ async function issueSession({ userId, loc, role, name, email }) {
     { uid: userId, loc, name: name ?? null, email: email ?? null, role, t }
   );
   await q("INSERT IGNORE INTO settings (location_id, updated_at) VALUES (:loc, :t)", { loc, t });
+  const locale = await effectiveLocale(userId, loc);
   const claims = { uid: userId, loc, role, name: name ?? "", email: email ?? "", exp: t + SESSION_TTL };
   const { exp, ...user } = claims;
-  return { token: signToken(claims), user };
+  return { token: signToken(claims), user: { ...user, locale } };
 }
 
 /* ---------- Auth ---------- */
@@ -671,6 +691,17 @@ app.get("/me/settings", authed, async (c) => {
     break_end: st?.break_end ?? null,
     break_paid: Boolean(st?.break_paid),
   });
+});
+
+app.put("/me/locale", authed, async (c) => {
+  const { uid, loc } = c.get("claims");
+  const b = (await c.req.json().catch(() => null)) ?? {};
+  if (b.locale !== null && !LOCALES.includes(b.locale)) throw new HttpError(400, "INVALID_LOCALE");
+  await q(
+    "UPDATE employees SET locale = :locale, updated_at = :t WHERE user_id = :uid AND location_id = :loc",
+    { locale: b.locale, t: now(), uid, loc }
+  );
+  return c.json({ locale: await effectiveLocale(uid, loc) });
 });
 
 app.get("/me/sessions", authed, async (c) => {
@@ -1295,6 +1326,8 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   }
   const breakPaid = has("break_paid") ? b.break_paid : Boolean(cur.break_paid);
   if (typeof breakPaid !== "boolean") throw new HttpError(400, "INVALID_BREAKS");
+  const locale = pick("locale") ?? "ar";
+  if (!LOCALES.includes(locale)) throw new HttpError(400, "INVALID_LOCALE");
   const notePolicy = pick("note_on_stop") ?? "off";
   if (!NOTE_POLICIES.includes(notePolicy)) throw new HttpError(400, "INVALID_NOTE_POLICY");
   if (has("activity_monitoring") && typeof b.activity_monitoring !== "boolean") {
@@ -1320,7 +1353,7 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
                                                   break_policy_since, :t),
                          activity_monitoring_since = IF(activity_monitoring = 0 AND :monitoring = 1,
                                                         :t, activity_monitoring_since),
-                         timezone = :tz, daily_target_hours = :target, work_start = :ws,
+                         timezone = :tz, locale = :locale, daily_target_hours = :target, work_start = :ws,
                          work_end = :we, work_days = :wd,
                          late_grace_minutes = :grace, max_session_hours = :max,
                          breaks_enabled = :breaksEnabled, break_mode = :breakMode,
@@ -1329,7 +1362,7 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
                          note_on_stop = :notePolicy, updated_at = :t
       WHERE location_id = :loc`,
     {
-      tz: timezone, target, ws: workStart, we: workEnd, wd: workDays, grace, max,
+      tz: timezone, locale, target, ws: workStart, we: workEnd, wd: workDays, grace, max,
       // Kept in sync so code that still reads breaks_enabled behaves the same.
       breaksEnabled: breakMode === "flexible" ? 1 : 0, breakMode, breakStart, breakEnd,
       breakPaid: breakPaid ? 1 : 0, notePolicy, t: now(), loc,
@@ -1496,9 +1529,37 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
 
 const DEFAULT_REDIRECT_URI = "https://timeclock.noursky.com/oauth/callback";
 
-// A tiny self-contained Arabic page; the texts are fixed strings, never request data.
-function installPage(title, message) {
-  return `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+const INSTALL_TEXT = {
+  ar: {
+    failed: "تعذّر التثبيت", connected: "تم الربط",
+    missingCode: "الرابط ناقص. أعد تثبيت التطبيق من الـ Marketplace.",
+    notConfigured: "الربط مع GHL غير مُعدّ على السيرفر بعد. تواصل مع NourSky.",
+    unreachable: "ما قدرنا نوصل لـ GHL. جرّب تعيد التثبيت بعد شوي.",
+    refused: "GHL رفض طلب الربط. أعد تثبيت التطبيق من الـ Marketplace.",
+    storeFailed: "صار خطأ أثناء حفظ الربط. أعد تثبيت التطبيق من الـ Marketplace.",
+    done: "تم ربط TimeClock بحسابك. بتقدر تسكّر هالصفحة وترجع لـ GHL.",
+  },
+  en: {
+    failed: "Installation failed", connected: "Connected",
+    missingCode: "The link is incomplete. Reinstall the app from the Marketplace.",
+    notConfigured: "The GHL connection is not set up on the server yet. Contact NourSky.",
+    unreachable: "We couldn't reach GHL. Try reinstalling in a moment.",
+    refused: "GHL refused the connection request. Reinstall the app from the Marketplace.",
+    storeFailed: "Something went wrong while saving the connection. Reinstall the app from the Marketplace.",
+    done: "TimeClock is connected to your account. You can close this page and return to GHL.",
+  },
+};
+/** The install page runs before we know the user: Arabic for an Arabic browser, else English. */
+function installLang(c) {
+  const first = (c.req.header("accept-language") ?? "").split(",")[0].trim().toLowerCase();
+  return first.startsWith("ar") ? "ar" : "en";
+}
+// A tiny self-contained page; the texts are fixed strings, never request data.
+function installPage(c, titleKey, messageKey) {
+  const lang = installLang(c);
+  const tx = INSTALL_TEXT[lang];
+  const title = tx[titleKey], message = tx[messageKey];
+  return `<!doctype html><html lang="${lang}" dir="${lang === "ar" ? "rtl" : "ltr"}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
 <style>body{font-family:system-ui,Tahoma,sans-serif;background:#F7F6FB;color:#1D1B2E;display:grid;place-items:center;min-height:100vh;margin:0;padding:16px}
 main{max-width:460px;background:#fff;border:1px solid #E3E0F0;border-radius:14px;padding:28px}h1{color:#6C5CE7;font-size:20px;margin:0 0 10px}p{margin:0;line-height:1.8}</style>
@@ -1508,11 +1569,11 @@ main{max-width:460px;background:#fff;border:1px solid #E3E0F0;border-radius:14px
 app.get("/oauth/callback", async (c) => {
   const code = c.req.query("code");
   if (!code) {
-    return c.html(installPage("تعذّر التثبيت", "الرابط ناقص. أعد تثبيت التطبيق من الـ Marketplace."), 400);
+    return c.html(installPage(c, "failed", "missingCode"), 400);
   }
   // A malformed key is "not configured": check before the single-use code is spent.
   if (!env.GHL_CLIENT_ID || !env.GHL_CLIENT_SECRET || !/^[0-9a-f]{64}$/i.test(env.TOKEN_ENC_KEY || "")) {
-    return c.html(installPage("تعذّر التثبيت", "الربط مع GHL غير مُعدّ على السيرفر بعد. تواصل مع NourSky."), 503);
+    return c.html(installPage(c, "failed", "notConfigured"), 503);
   }
   let tok;
   try {
@@ -1523,9 +1584,9 @@ app.get("/oauth/callback", async (c) => {
   } catch (e) {
     console.error("[oauth]", e.message, e.status ?? "");
     if (e.message === "OAUTH_UNREACHABLE") {
-      return c.html(installPage("تعذّر التثبيت", "ما قدرنا نوصل لـ GHL. جرّب تعيد التثبيت بعد شوي."), 504);
+      return c.html(installPage(c, "failed", "unreachable"), 504);
     }
-    return c.html(installPage("تعذّر التثبيت", "GHL رفض طلب الربط. أعد تثبيت التطبيق من الـ Marketplace."), 502);
+    return c.html(installPage(c, "failed", "refused"), 502);
   }
   try {
     const t = now();
@@ -1546,9 +1607,9 @@ app.get("/oauth/callback", async (c) => {
     );
   } catch (e) {
     console.error("[oauth] store failed", e.message);
-    return c.html(installPage("تعذّر التثبيت", "صار خطأ أثناء حفظ الربط. أعد تثبيت التطبيق من الـ Marketplace."), 500);
+    return c.html(installPage(c, "failed", "storeFailed"), 500);
   }
-  return c.html(installPage("تم الربط", "تم ربط TimeClock بحسابك. بتقدر تسكّر هالصفحة وترجع لـ GHL."));
+  return c.html(installPage(c, "connected", "done"));
 });
 
 /* ---------- Static SPA (must be registered AFTER all API routes) ---------- */

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { ToastProvider } from "./ToastContext.jsx";
 import EmployeeScreen from "./EmployeeScreen.jsx";
+import { I18nProvider } from "../i18n.jsx";
 
 const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
 
@@ -392,5 +393,12 @@ describe("EmployeeScreen", () => {
     wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
     await screen.findByLabelText("ملاحظة للمدير");
     expect(document.title).toBe("⚠️ الدوام");
+  });
+
+  it("speaks English inside an English provider", async () => {
+    const api = makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() });
+    render(<I18nProvider locale="en"><ToastProvider><EmployeeScreen api={api} user={{ name: "Sara" }} /></ToastProvider></I18nProvider>);
+    expect(await screen.findByRole("button", { name: /Clock in/ })).toBeInTheDocument();
+    expect(screen.getByText("My hours this week")).toBeInTheDocument();
   });
 });

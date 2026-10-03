@@ -5,6 +5,7 @@
 CREATE TABLE IF NOT EXISTS settings (
   location_id        VARCHAR(64)  NOT NULL PRIMARY KEY,
   timezone           VARCHAR(64)  NOT NULL DEFAULT 'Asia/Riyadh',
+  locale             ENUM('ar','en') NOT NULL DEFAULT 'ar',
   daily_target_hours DECIMAL(4,2) NOT NULL DEFAULT 8,
   work_start         CHAR(5)      NULL DEFAULT '09:00',
   work_end           CHAR(5)      NULL,
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS employees (
   name        VARCHAR(255) NULL,
   email       VARCHAR(255) NULL,
   role        ENUM('manager','employee') NOT NULL,
+  locale      ENUM('ar','en') NULL,  -- personal language; NULL = follow the company
   is_active   TINYINT(1)   NOT NULL DEFAULT 1,
   created_at  BIGINT       NOT NULL,
   updated_at  BIGINT       NOT NULL,

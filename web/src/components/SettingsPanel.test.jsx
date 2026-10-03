@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ToastProvider } from "./ToastContext.jsx";
 import SettingsPanel from "./SettingsPanel.jsx";
+import { I18nProvider } from "../i18n.jsx";
 
 const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
 
@@ -47,8 +48,8 @@ describe("SettingsPanel", () => {
     };
     wrap(<SettingsPanel api={api} />);
     expect(await screen.findByLabelText("نوع الاستراحة")).toHaveValue("fixed");
-    expect(screen.getByLabelText("بداية الاستراحة (HH:MM)")).toHaveValue("13:00");
-    expect(screen.getByLabelText("نهاية الاستراحة (HH:MM)")).toHaveValue("14:00");
+    expect(screen.getByLabelText("بداية الاستراحة")).toHaveValue("13:00");
+    expect(screen.getByLabelText("نهاية الاستراحة")).toHaveValue("14:00");
     expect(screen.getByLabelText("استراحة مدفوعة (تنحسب من الدوام)")).toBeChecked();
     expect(screen.getByLabelText("ملاحظة عند إنهاء الدوام")).toHaveValue("required");
   });
@@ -57,7 +58,7 @@ describe("SettingsPanel", () => {
     const api = { get: vi.fn(async () => ({ ...BASE, break_mode: "flexible", break_start: null, break_end: null, break_paid: false })), put: vi.fn() };
     wrap(<SettingsPanel api={api} />);
     expect(await screen.findByLabelText("نوع الاستراحة")).toHaveValue("flexible");
-    expect(screen.queryByLabelText("بداية الاستراحة (HH:MM)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("بداية الاستراحة")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("استراحة مدفوعة (تنحسب من الدوام)")).not.toBeInTheDocument();
   });
 
@@ -66,8 +67,8 @@ describe("SettingsPanel", () => {
     const api = { get: vi.fn(async () => saved), put: vi.fn(async (_p, body) => ({ ...saved, ...body })) };
     wrap(<SettingsPanel api={api} />);
     fireEvent.change(await screen.findByLabelText("نوع الاستراحة"), { target: { value: "fixed" } });
-    fireEvent.change(screen.getByLabelText("بداية الاستراحة (HH:MM)"), { target: { value: "13:00" } });
-    fireEvent.change(screen.getByLabelText("نهاية الاستراحة (HH:MM)"), { target: { value: "14:00" } });
+    fireEvent.change(screen.getByLabelText("بداية الاستراحة"), { target: { value: "13:00" } });
+    fireEvent.change(screen.getByLabelText("نهاية الاستراحة"), { target: { value: "14:00" } });
     fireEvent.change(screen.getByLabelText("ملاحظة عند إنهاء الدوام"), { target: { value: "optional" } });
     fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
     await waitFor(() => expect(api.put).toHaveBeenCalled());
@@ -182,7 +183,7 @@ describe("SettingsPanel", () => {
   it("shows the working-day end and the seven work-day boxes", async () => {
     const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? WH : { installed: false })), put: vi.fn() };
     wrap(<SettingsPanel api={api} />);
-    expect(await screen.findByLabelText("نهاية الدوام (HH:MM)")).toHaveValue("17:00");
+    expect(await screen.findByLabelText("نهاية الدوام")).toHaveValue("17:00");
     for (const d of ["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"]) {
       expect(screen.getByLabelText(d)).toBeChecked();
     }
@@ -195,7 +196,7 @@ describe("SettingsPanel", () => {
     };
     wrap(<SettingsPanel api={api} />);
     fireEvent.click(await screen.findByLabelText("الجمعة"));
-    fireEvent.change(screen.getByLabelText("نهاية الدوام (HH:MM)"), { target: { value: "16:30" } });
+    fireEvent.change(screen.getByLabelText("نهاية الدوام"), { target: { value: "16:30" } });
     fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
     await waitFor(() => expect(api.put).toHaveBeenCalled());
     expect(api.put.mock.calls[0][1]).toMatchObject({ work_end: "16:30", work_days: 95 });
@@ -235,5 +236,37 @@ describe("SettingsPanel", () => {
       expect(api.put.mock.calls[0][1].work_days).toBe(expected);
       unmount();
     }
+  });
+  it("uses time pickers for working hours and breaks", async () => {
+    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? { ...BASE, break_mode: "fixed", break_start: "13:00", break_end: "14:00", work_end: "17:00" } : { installed: false })), put: vi.fn() };
+    wrap(<SettingsPanel api={api} />);
+    for (const label of ["بداية الدوام", "نهاية الدوام", "بداية الاستراحة", "نهاية الاستراحة"]) {
+      expect(await screen.findByLabelText(label)).toHaveAttribute("type", "time");
+    }
+  });
+  it("saves the company language", async () => {
+    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? { ...BASE, locale: "ar" } : { installed: false })), put: vi.fn(async (_p, b) => b) };
+    wrap(<SettingsPanel api={api} />);
+    fireEvent.change(await screen.findByLabelText("لغة الشركة"), { target: { value: "en" } });
+    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(api.put.mock.calls[0][1].locale).toBe("en"));
+  });
+
+  it("switches this screen to the saved company language without touching the personal choice", async () => {
+    const onChange = vi.fn();
+    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? { ...BASE, locale: "ar" } : { installed: false })), put: vi.fn(async (_p, b) => ({ ...b })) };
+    render(<I18nProvider locale="ar" onChange={onChange}><ToastProvider><SettingsPanel api={api} /></ToastProvider></I18nProvider>);
+    fireEvent.change(await screen.findByLabelText("لغة الشركة"), { target: { value: "en" } });
+    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(document.documentElement.dir).toBe("ltr"));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(api.put).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the screen language when the company language is unchanged", async () => {
+    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? { ...BASE, locale: "ar" } : { installed: false })), put: vi.fn(async (_p, b) => ({ ...b })) };
+    render(<I18nProvider locale="ar"><ToastProvider><SettingsPanel api={api} /></ToastProvider></I18nProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(document.documentElement.dir).toBe("rtl");
   });
 });

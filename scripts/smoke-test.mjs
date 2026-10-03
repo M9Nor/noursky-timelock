@@ -1205,15 +1205,39 @@ check("a webhook over 256 KB → 413 PAYLOAD_TOO_LARGE",
   awBig.status === 413 && awBig.body?.error === "PAYLOAD_TOO_LARGE", `(${awBig.status} ${JSON.stringify(awBig.body)})`);
 
 // OAuth callback. The local .env has no GHL_CLIENT_ID, so a code cannot be exchanged here.
-const awNoCode = await fetch(`${BASE}/oauth/callback`);
+const awNoCode = await fetch(`${BASE}/oauth/callback`, { headers: { "Accept-Language": "ar" } });
 check("the OAuth callback without a code shows an error page",
   awNoCode.status === 400 && (await awNoCode.text()).includes("أعد تثبيت التطبيق"));
-const awBadCode = await fetch(`${BASE}/oauth/callback?code=test-code`);
+const awBadCode = await fetch(`${BASE}/oauth/callback?code=test-code`, { headers: { "Accept-Language": "ar" } });
 const awBadCodeText = await awBadCode.text();
 check("the OAuth callback with a bad code shows an Arabic error page (503 unconfigured / 502 refused)",
   (awBadCode.status === 503 && awBadCodeText.includes("غير مُعدّ")) ||
   (awBadCode.status === 502 && awBadCodeText.includes("GHL رفض")));
 await cleanupLocation(AWLOC);
+
+// --- Language (bilingual spec). Own location.
+const LGLOC = `${LOC}-lg`;
+const lgSso = (uid, role) => sso({ userId: `${LGLOC}-${uid}`, role, type: "account", activeLocation: LGLOC, userName: uid, email: `${uid}@x.com` });
+const lgM = await lgSso("m1", "admin"), lgE = await lgSso("u1", "user");
+check("a new user starts in the company language (Arabic by default)", lgE.body?.user?.locale === "ar", `(${JSON.stringify(lgE.body?.user)})`);
+const lgSet = await call(lgM.body?.token, "PUT", "/admin/settings", { locale: "en" });
+check("the manager sets the company language", lgSet.body?.locale === "en", `(${lgSet.status} ${JSON.stringify(lgSet.body?.error)})`);
+check("users follow the company language", (await lgSso("u1", "user")).body?.user?.locale === "en");
+check("a missing locale keeps the company language", (await call(lgM.body?.token, "PUT", "/admin/settings", { late_grace_minutes: 10 })).body?.locale === "en");
+check("an unknown company language → 400", (await call(lgM.body?.token, "PUT", "/admin/settings", { locale: "fr" })).body?.error === "INVALID_LOCALE");
+const lgMine = await call(lgE.body?.token, "PUT", "/me/locale", { locale: "ar" });
+check("a user picks their own language", lgMine.status === 200 && lgMine.body?.locale === "ar");
+check("the personal choice wins at the next login", (await lgSso("u1", "user")).body?.user?.locale === "ar");
+check("clearing it follows the company again", (await call(lgE.body?.token, "PUT", "/me/locale", { locale: null })).body?.locale === "en");
+check("an unknown personal language → 400", (await call(lgE.body?.token, "PUT", "/me/locale", { locale: "fr" })).body?.error === "INVALID_LOCALE");
+check("a body without locale → 400", (await call(lgE.body?.token, "PUT", "/me/locale", {})).body?.error === "INVALID_LOCALE");
+const lgInstallEn = await fetch(`${BASE}/oauth/callback`, { headers: { "Accept-Language": "en-US,en;q=0.9" } });
+const lgInstallEnText = await lgInstallEn.text();
+check("the install page speaks English to an English browser",
+  lgInstallEn.status === 400 && lgInstallEnText.includes('lang="en"') && lgInstallEnText.includes("Reinstall the app"));
+const lgInstallAr = await (await fetch(`${BASE}/oauth/callback`, { headers: { "Accept-Language": "ar-SY,ar;q=0.9,en;q=0.5" } })).text();
+check("the install page speaks Arabic to an Arabic browser", lgInstallAr.includes('dir="rtl"') && lgInstallAr.includes("أعد تثبيت التطبيق"));
+await cleanupLocation(LGLOC);
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
 

@@ -1,33 +1,46 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Button from "./Button.jsx";
 import { useToast } from "./ToastContext.jsx";
 import { formatStamp } from "../time.js";
+import { useI18n } from "../i18n.jsx";
 
 // Saturday first, as the week reads in the region; bit = JavaScript getDay() (0 = Sunday).
-const WEEK = [["السبت", 6], ["الأحد", 0], ["الاثنين", 1], ["الثلاثاء", 2], ["الأربعاء", 3], ["الخميس", 4], ["الجمعة", 5]];
+const WEEK = [6, 0, 1, 2, 3, 4, 5];
+
+// Validation codes the settings form shows with their own message (`err.<CODE>`); anything else is generic.
+const SPECIFIC_ERRORS = new Set([
+  "INVALID_TIMEZONE", "INVALID_HOURS", "INVALID_WORK_START", "INVALID_WORK_END", "INVALID_WORK_DAYS", "INVALID_GRACE",
+  "INVALID_BREAKS", "INVALID_BREAK_MODE", "INVALID_BREAK_WINDOW", "INVALID_IDLE_MINUTES", "INVALID_ACTIVITY_MONITORING",
+  "INVALID_NOTE_POLICY", "INVALID_LOCALE",
+]);
 
 export default function SettingsPanel({ api }) {
+  const { t, setLocale } = useI18n();
+  const loadedLocale = useRef(null); // the company language as last loaded/saved (not the unsaved form value)
   const [s, setS] = useState(null);
   const [error, setError] = useState("");
   const [conn, setConn] = useState(null);
   const [connFailed, setConnFailed] = useState(false);
   const toast = useToast();
 
-  useEffect(() => { api.get("/admin/settings").then(setS).catch(() => setError("حدث خطأ، حاول مرة أخرى")); }, []);
+  useEffect(() => { api.get("/admin/settings").then((r) => { loadedLocale.current = r.locale ?? "ar"; setS(r); }).catch(() => setError("err.generic")); }, []);
   // The connection status is informative only; a failure never blocks the settings form.
   useEffect(() => { api.get("/admin/ghl-connection").then(setConn).catch(() => setConnFailed(true)); }, []);
-  if (!s && !error) return <div className="panel muted">جارٍ التحميل…</div>;
-  if (!s) return <div className="panel error">حدث خطأ، حاول مرة أخرى</div>;
+  if (!s && !error) return <div className="panel muted">{t("common.loading")}</div>;
+  if (!s) return <div className="panel error">{t("err.generic")}</div>;
 
   // last_event_at outlives an uninstall, so it only feeds the sub-text, never "connected".
   const connected = Boolean(conn && conn.installed && (conn.has_activity_scope || conn.events_24h > 0));
   const connectionText = connFailed || (!conn && s)
-    ? (connFailed ? "تعذّر فحص حالة الربط مع GHL" : "جارٍ فحص الربط مع GHL…")
+    ? (connFailed ? t("settings.connFailed") : t("settings.connChecking"))
     : connected
-      ? `✓ مربوط — ${conn.last_event_at != null
-        ? `آخر حدث وصل: ${formatStamp(conn.last_event_at, s.timezone)}`
-        : "لسا ما وصل ولا حدث"}${s.activity_monitoring ? ` · وصل ${conn.events_24h ?? 0} حدث بآخر 24 ساعة` : ""}`
-      : "✗ غير مربوط — أعد تثبيت التطبيق من الـ Marketplace لتتفعّل صلاحية النشاط";
+      ? t("settings.connected", {
+        detail: (conn.last_event_at != null
+          ? t("settings.lastEvent", { time: formatStamp(conn.last_event_at, s.timezone) })
+          : t("settings.noEvents"))
+          + (s.activity_monitoring ? ` · ${t("settings.events24", { n: conn.events_24h ?? 0 })}` : ""),
+      })
+      : t("settings.notConnected");
 
   const set = (k) => (e) => setS({ ...s, [k]: e.target.value });
   async function save() {
@@ -53,95 +66,94 @@ export default function SettingsPanel({ api }) {
         activity_monitoring: Boolean(s.activity_monitoring),
         // Same empty-field rule as the grace: an emptied field means the default.
         idle_minutes: s.idle_minutes === "" || s.idle_minutes == null ? 30 : Number(s.idle_minutes),
+        locale: s.locale ?? "ar",
       });
-      setS(saved); toast("تم الحفظ");
+      setS(saved); toast(t("settings.saved"));
+      // The company language is what this manager sees by default: switch now, but it is not a personal choice (no PUT /me/locale).
+      if (saved.locale && saved.locale !== loadedLocale.current) setLocale(saved.locale, { persist: false });
+      loadedLocale.current = saved.locale ?? loadedLocale.current;
     } catch (e) {
-      setError(e.code === "INVALID_TIMEZONE" ? "المنطقة الزمنية غير صحيحة"
-        : e.code === "INVALID_HOURS" ? "الساعات غير صحيحة"
-        : e.code === "INVALID_WORK_START" ? "وقت البداية غير صحيح"
-        : e.code === "INVALID_WORK_END" ? "نهاية الدوام غير صحيحة (لازم تكون بعد البداية)"
-        : e.code === "INVALID_WORK_DAYS" ? "اختار يوم دوام واحد على الأقل"
-        : e.code === "INVALID_GRACE" ? "سماح التأخير غير صحيح"
-        : e.code === "INVALID_BREAKS" ? "إعداد الاستراحات غير صحيح"
-        : e.code === "INVALID_BREAK_MODE" ? "نوع الاستراحة غير صحيح"
-        : e.code === "INVALID_BREAK_WINDOW" ? "وقت الاستراحة غير صحيح (البداية لازم تكون قبل النهاية)"
-        : e.code === "INVALID_IDLE_MINUTES" ? "حد الخمول لازم يكون بين 1 و240 دقيقة"
-        : e.code === "INVALID_ACTIVITY_MONITORING" ? "إعداد مراقبة النشاط غير صحيح"
-        : e.code === "INVALID_NOTE_POLICY" ? "إعداد الملاحظة غير صحيح"
-        : "حدث خطأ، حاول مرة أخرى");
+      setError(SPECIFIC_ERRORS.has(e.code) ? `err.${e.code}` : "err.generic");
     }
   }
 
   return (
     <section className="panel" style={{ maxWidth: 480 }}>
-      <div className="panel-h"><h2>الإعدادات</h2></div>
-      <div className="field"><label>المنطقة الزمنية</label><input value={s.timezone} onChange={set("timezone")} /></div>
-      <div className="field"><label>الهدف اليومي (ساعات)</label><input type="number" step="0.5" value={s.daily_target_hours} onChange={set("daily_target_hours")} /></div>
-      <div className="field"><label>حد الجلسة (ساعات)</label><input type="number" step="0.5" value={s.max_session_hours} onChange={set("max_session_hours")} /></div>
-      <div className="field"><label htmlFor="work-start">بداية الدوام (HH:MM)</label><input id="work-start" value={s.work_start ?? ""} onChange={set("work_start")} /></div>
-      <div className="field"><label htmlFor="work-end">نهاية الدوام (HH:MM)</label><input id="work-end" value={s.work_end ?? ""} onChange={set("work_end")} /></div>
+      <div className="panel-h"><h2>{t("settings.title")}</h2></div>
+      <div className="field"><label>{t("settings.timezone")}</label><input value={s.timezone} onChange={set("timezone")} /></div>
+      <div className="field"><label>{t("settings.dailyTarget")}</label><input type="number" step="0.5" value={s.daily_target_hours} onChange={set("daily_target_hours")} /></div>
+      <div className="field"><label>{t("settings.maxSession")}</label><input type="number" step="0.5" value={s.max_session_hours} onChange={set("max_session_hours")} /></div>
+      <div className="field"><label htmlFor="work-start">{t("settings.workStart")}</label><input id="work-start" type="time" value={s.work_start ?? ""} onChange={set("work_start")} /></div>
+      <div className="field"><label htmlFor="work-end">{t("settings.workEnd")}</label><input id="work-end" type="time" value={s.work_end ?? ""} onChange={set("work_end")} /></div>
       <fieldset className="field days">
-        <legend>أيام الدوام</legend>
-        {WEEK.map(([name, bit]) => {
+        <legend>{t("settings.workDays")}</legend>
+        {WEEK.map((bit) => {
           const days = s.work_days ?? 127;
           return (
             <label key={bit}>
               <input type="checkbox" checked={Boolean(days & (1 << bit))}
                 onChange={(e) => setS({ ...s, work_days: e.target.checked ? days | (1 << bit) : days & ~(1 << bit) })} />
-              {name}
+              {t(`settings.day.${bit}`)}
             </label>
           );
         })}
       </fieldset>
-      <div className="field"><label htmlFor="grace">سماح التأخير (دقائق)</label><input id="grace" type="number" step="1" min="0" max="240" value={s.late_grace_minutes ?? 15} onChange={set("late_grace_minutes")} /></div>
+      <div className="field"><label htmlFor="grace">{t("settings.grace")}</label><input id="grace" type="number" step="1" min="0" max="240" value={s.late_grace_minutes ?? 15} onChange={set("late_grace_minutes")} /></div>
       <div className="field">
-        <label htmlFor="break-mode">نوع الاستراحة</label>
+        <label htmlFor="break-mode">{t("settings.breakMode")}</label>
         <select id="break-mode" value={s.break_mode ?? "off"} onChange={set("break_mode")}>
-          <option value="off">بدون</option>
-          <option value="fixed">ثابتة (يحددها المدير)</option>
-          <option value="flexible">مرنة (الموظف يضغط)</option>
+          <option value="off">{t("settings.breakOff")}</option>
+          <option value="fixed">{t("settings.breakFixed")}</option>
+          <option value="flexible">{t("settings.breakFlexible")}</option>
         </select>
       </div>
       {s.break_mode === "fixed" && (
         <>
           <div className="row2">
-            <div className="field"><label htmlFor="break-start">بداية الاستراحة (HH:MM)</label><input id="break-start" value={s.break_start ?? ""} onChange={set("break_start")} /></div>
-            <div className="field"><label htmlFor="break-end">نهاية الاستراحة (HH:MM)</label><input id="break-end" value={s.break_end ?? ""} onChange={set("break_end")} /></div>
+            <div className="field"><label htmlFor="break-start">{t("settings.breakStart")}</label><input id="break-start" type="time" value={s.break_start ?? ""} onChange={set("break_start")} /></div>
+            <div className="field"><label htmlFor="break-end">{t("settings.breakEnd")}</label><input id="break-end" type="time" value={s.break_end ?? ""} onChange={set("break_end")} /></div>
           </div>
           <div className="field check">
-            <label><input type="checkbox" checked={Boolean(s.break_paid)} onChange={(e) => setS({ ...s, break_paid: e.target.checked })} />استراحة مدفوعة (تنحسب من الدوام)</label>
+            <label><input type="checkbox" checked={Boolean(s.break_paid)} onChange={(e) => setS({ ...s, break_paid: e.target.checked })} />{t("settings.breakPaid")}</label>
           </div>
         </>
       )}
       <div className="field">
-        <label htmlFor="note-policy">ملاحظة عند إنهاء الدوام</label>
+        <label htmlFor="note-policy">{t("settings.notePolicy")}</label>
         <select id="note-policy" value={s.note_on_stop ?? "off"} onChange={set("note_on_stop")}>
-          <option value="off">بدون</option>
-          <option value="optional">اختيارية</option>
-          <option value="required">إلزامية</option>
+          <option value="off">{t("settings.noteOff")}</option>
+          <option value="optional">{t("settings.noteOptional")}</option>
+          <option value="required">{t("settings.noteRequired")}</option>
         </select>
       </div>
       <div className="field check">
-        <label><input id="activity-monitoring" type="checkbox" checked={Boolean(s.activity_monitoring)} onChange={(e) => setS({ ...s, activity_monitoring: e.target.checked })} />مراقبة النشاط</label>
+        <label><input id="activity-monitoring" type="checkbox" checked={Boolean(s.activity_monitoring)} onChange={(e) => setS({ ...s, activity_monitoring: e.target.checked })} />{t("settings.monitoring")}</label>
       </div>
       {s.activity_monitoring && (
         <div className="field">
-          <label htmlFor="idle-minutes">حد الخمول (دقائق)</label>
+          <label htmlFor="idle-minutes">{t("settings.idleMinutes")}</label>
           <input id="idle-minutes" type="number" step="1" min="1" max="240" value={s.idle_minutes ?? 30} onChange={set("idle_minutes")} />
         </div>
       )}
       <div className="field">
-        <p className="hint" role="status" aria-label="حالة الربط مع GHL">{connectionText}</p>
-        <p className="hint">لازم يكون الموظفين عارفين إنه نشاطهم مراقب.</p>
+        <p className="hint" role="status" aria-label={t("settings.connAria")}>{connectionText}</p>
+        <p className="hint">{t("settings.awareHint")}</p>
         {s.activity_monitoring && (!s.work_start || !s.work_end) && (
-          <p className="hint">حدّد بداية ونهاية الدوام لتشتغل تنبيهات العمل بدون دوام</p>
+          <p className="hint">{t("settings.needHours")}</p>
         )}
         {conn?.unknown_active_users > 0 && (
-          <p className="hint">في نشاط بآخر 7 أيام من {conn.unknown_active_users} مستخدمين ما فتحوا TimeClock بعد</p>
+          <p className="hint">{t("settings.unknownUsers", { n: conn.unknown_active_users })}</p>
         )}
       </div>
-      {error && <div className="field"><span className="err">{error}</span></div>}
-      <div className="dlg-a"><Button onClick={save}>حفظ</Button></div>
+      <div className="field">
+        <label htmlFor="company-locale">{t("settings.companyLang")}</label>
+        <select id="company-locale" value={s.locale ?? "ar"} onChange={set("locale")}>
+          <option value="ar">{t("settings.langAr")}</option>
+          <option value="en">{t("settings.langEn")}</option>
+        </select>
+      </div>
+      {error && <div className="field"><span className="err">{t(error)}</span></div>}
+      <div className="dlg-a"><Button onClick={save}>{t("common.save")}</Button></div>
     </section>
   );
 }

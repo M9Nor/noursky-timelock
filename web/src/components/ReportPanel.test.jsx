@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ToastProvider } from "./ToastContext.jsx";
+import { I18nProvider } from "../i18n.jsx";
 import ReportPanel from "./ReportPanel.jsx";
 
 const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
@@ -138,5 +139,29 @@ describe("ReportPanel", () => {
     expect(screen.getByRole("columnheader", { name: "أطول خمول" })).toBeInTheDocument();
     expect(screen.getByText("1 س 5 د")).toBeInTheDocument();
     expect(screen.getByText("4")).toBeInTheDocument();
+  });
+  it("shows English column headers inside an English provider", async () => {
+    render(<I18nProvider locale="en"><ToastProvider><ReportPanel api={makeApi()} /></ToastProvider></I18nProvider>);
+    expect(await screen.findByRole("columnheader", { name: "Late days" })).toBeInTheDocument();
+  });
+
+  it("names who closed each session, in the interface language", async () => {
+    const base = { started_at: 1000, ended_at: 4600, break_sec: 0, note: null, late_by_sec: null };
+    const sessions = [
+      { ...base, id: "s1", closed_by: "user" }, { ...base, id: "s2", closed_by: "auto" },
+      { ...base, id: "s3", closed_by: "admin" }, { ...base, id: "s4", closed_by: "other" },
+    ];
+    const { unmount } = wrap(<ReportPanel api={makeApi({ sessions })} />);
+    fireEvent.click(await screen.findByText("أحمد"));
+    expect(await screen.findByText("الموظف")).toBeInTheDocument();
+    expect(screen.getByText("تلقائي")).toBeInTheDocument();
+    expect(screen.getByText("المدير")).toBeInTheDocument();
+    expect(screen.getByText("other")).toBeInTheDocument();
+    unmount();
+    render(<I18nProvider locale="en"><ToastProvider><ReportPanel api={makeApi({ sessions })} /></ToastProvider></I18nProvider>);
+    fireEvent.click(await screen.findByText("أحمد"));
+    expect(await screen.findByText("Employee")).toBeInTheDocument();
+    expect(screen.getByText("Automatic")).toBeInTheDocument();
+    expect(screen.getByText("Manager")).toBeInTheDocument();
   });
 });

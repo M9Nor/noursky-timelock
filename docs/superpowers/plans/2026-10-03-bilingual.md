@@ -232,14 +232,16 @@ import { I18nProvider, useI18n, translate } from "./i18n.jsx";
 import ar from "./locales/ar.js";
 import en from "./locales/en.js";
 
-const ARABIC = /[؀-ۿ]/;
+const ARABIC = /[\u0600-\u06FF]/;
+// Each language's own name is written in that language in both dictionaries.
+const NATIVE_NAMES = new Set(["lang.switch", "settings.langAr"]);
 // Files whose user-visible text must come only from the dictionaries. Tasks 3–4 add theirs.
 const TRANSLATED_FILES = ["App.jsx", "components/TopBar.jsx"];
 
 describe("dictionaries", () => {
   it("have the same keys", () => { expect(Object.keys(en).sort()).toEqual(Object.keys(ar).sort()); });
   it("keep English free of Arabic letters", () => {
-    expect(Object.entries(en).filter(([, v]) => ARABIC.test(v))).toEqual([]);
+    expect(Object.entries(en).filter(([k, v]) => !NATIVE_NAMES.has(k) && ARABIC.test(v))).toEqual([]);
   });
   it("leave no Arabic text in translated files", () => {
     const offenders = TRANSLATED_FILES.filter((f) => ARABIC.test(readFileSync(new URL(`./${f}`, import.meta.url), "utf8")));
@@ -370,7 +372,7 @@ export default {
 };
 ```
 
-(`lang.switch` shows the *other* language's name, so the English dictionary's value is the word "عربي" — the one allowed exception: in `i18n.test.jsx` change the "free of Arabic letters" filter to skip the key `lang.switch`.)
+(`lang.switch` shows the *other* language's name, so the English dictionary's value is the word "عربي" — that is why the test skips the keys in `NATIVE_NAMES`.)
 
 `time.js`: give `formatIdle`, `formatLateness`, `formatBreak` a `locale = "ar"` parameter and a unit map:
 
@@ -392,7 +394,7 @@ and build the strings from it (`${m} ${u.min}`, `${h} ${u.h} ${mm} ${u.min}`, `$
 
 `web/index.html`: keep `dir="rtl" lang="ar"` (the provider sets the real values at runtime).
 
-- [ ] **Step 4: Run** full web suite + build → **0 failed**, 135 + 7 = **142**; no act() warnings.
+- [ ] **Step 4: Run** full web suite + build → **0 failed**, 135 + 8 = **143**; no act() warnings.
 - [ ] **Step 5: Commit** `feat(i18n): language module, English formatters, top-bar language switch, direction-neutral CSS`.
 
 ---
@@ -419,7 +421,7 @@ and in `StopNoteDialog.test.jsx` one test rendering it inside `<I18nProvider loc
 
 - [ ] **Step 2: Run** → FAIL.
 - [ ] **Step 3: Implement** — in each file call `const { t, locale } = useI18n();`, replace every Arabic literal (JSX text, attributes like `aria-label`/`placeholder`/labels, toast messages, error-code maps) with `t("employee.…")` / `t("history.…")` / `t("stopNote.…")` keys, adding each key to **both** dictionaries (Arabic = the exact current text, English per the Glossary). Templates with values use placeholders (`t("employee.idleBanner", { time, dur })`). Pass `locale` to `formatIdle`/`formatLateness`/`formatBreak`. Rewrite Arabic comments in English. The error map becomes `t("err.<CODE>")` keys (shared `err.*` namespace, also used in Task 4; `err.generic` = "حدث خطأ، حاول مرة أخرى" / "Something went wrong, please try again").
-- [ ] **Step 4: Run** full suite + build → 0 failed (142 + 2 = **144**); existing Arabic tests unchanged and passing.
+- [ ] **Step 4: Run** full suite + build → 0 failed (143 + 2 = **145**); existing Arabic tests unchanged and passing.
 - [ ] **Step 5: Commit** `feat(i18n): employee screens in Arabic and English`.
 
 ---
@@ -456,10 +458,10 @@ it("saves the company language", async () => {
 - [ ] **Step 2: Run** → FAIL (scan test, new tests).
 - [ ] **Step 3: Implement** — same method as Task 3 (`manager.*`, `live.*`, `report.*`, `edit.*`, `alerts.*`, `settings.*`, `err.*` keys; Glossary terms; pass `locale` to formatters; English comments). In `SettingsPanel.jsx`:
   - the four time fields become `<input id=… type="time" value={s.x ?? ""} onChange={set("x")} />` with labels "بداية الدوام" / "نهاية الدوام" / "بداية الاستراحة" / "نهاية الاستراحة" (English: Work start / Work end / Break start / Break end) — no "(HH:MM)";
-  - a "لغة الشركة" / "Company language" `<select id="company-locale">` with options `ar` "العربية" and `en` "English" (option labels are each language's own name in both dictionaries — add `settings.langAr` with value "العربية" in both and treat it like `lang.switch` in the no-Arabic test's exception list), sent as `locale: s.locale ?? "ar"` in the PUT body;
+  - a "لغة الشركة" / "Company language" `<select id="company-locale">` with options `ar` "العربية" and `en` "English" (option labels are each language's own name in both dictionaries — add `settings.langAr` with value "العربية" in both dictionaries — already in `NATIVE_NAMES` — and `settings.langEn` "English" in both), sent as `locale: s.locale ?? "ar"` in the PUT body;
   - error map adds `INVALID_LOCALE`.
   - Day names in the work-days fieldset come from `settings.day.<n>` keys.
-- [ ] **Step 4: Run** full suite + build → 0 failed (144 + 5 = **149**); no Arabic left in any component (scan passes).
+- [ ] **Step 4: Run** full suite + build → 0 failed (145 + 4 = **149**); no Arabic left in any component (scan passes).
 - [ ] **Step 5: Commit** `feat(i18n): manager screens in Arabic and English, company language, time pickers`.
 
 ---
