@@ -40,6 +40,8 @@ web/                     # React + Vite SPA (source of the UI)
   src/api.js             # fetch wrapper: bearer token, ApiError, api.download (authed CSV)
   src/auth.js            # GHL postMessage SSO handshake + dev-login
   src/time.js            # server-time offset + duration/clock formatting (Western digits)
+  src/i18n.jsx           # language provider + t() (home-made, no library); company default + personal override
+  src/locales/           # ar.js / en.js dictionaries (every user-visible string; guard tests keep keys in sync)
   src/alertTitle.js      # ⚠️ tab-title hook while an alert is shown
   src/styles.css         # NourSky design system (light theme, class-based)
   src/components/        # Icon, Button, Toast, TopBar, EmployeeScreen, KpiRow, LiveFloor,
@@ -104,7 +106,7 @@ BASE_URL=http://localhost:3000 GHL_SHARED_SECRET=<same-as-.env> npm run test:smo
 - Plain ESM JS everywhere; 2-space indent; no semicolon-free style (semicolons used).
 - Errors: `{ error: "CODE" }` via `HttpError`; new codes go in `PROJECT.md` §8.
 - All timestamps are UNIX seconds (UTC); timezone conversion only for display/CSV.
-- Frontend: Arabic RTL, Western digits, class-based CSS tokens, token kept in memory
+- Frontend: Arabic (RTL) and English (LTR), all user-visible text from `web/src/locales/*` via `t()`, Western digits in both, class-based CSS tokens, token kept in memory
   (never localStorage), live timers from API `server_time`.
 
 ## Hard rules
@@ -123,7 +125,7 @@ BASE_URL=http://localhost:3000 GHL_SHARED_SECRET=<same-as-.env> npm run test:smo
 - **Never commit secrets, `.env` files, credentials, or Hostinger login data.**
 
 ## UI rules (for `web/`)
-- Arabic, RTL (`dir="rtl"`), numbers always Western digits (1, 2, 3).
+- Arabic (RTL) and English (LTR); all user-visible text comes from `web/src/locales/*` (never hard-coded in components); Western digits (1, 2, 3) in both. Use direction-neutral CSS (logical properties). Company default language in settings, personal override per user.
 - Design system: light theme only (dark mode is deferred — see DECISIONS.md). Brand
   tokens live in `web/src/styles.css` `:root` (accent `#6C5CE7`, pink `#E91E63`, etc.).
 - Keep the token in memory (React state/ref), not localStorage. On 401, redo the SSO

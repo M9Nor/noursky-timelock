@@ -5,6 +5,24 @@ Format: **Date — Decision** · Reason · Alternatives rejected.
 
 ---
 
+### 2026-10-03 — Arabic + English
+The UI is now bilingual (Arabic RTL, English LTR). Company language is a setting
+(`settings.locale`, default Arabic); each employee can override it (`employees.locale`,
+`PUT /me/locale`, language button in the top bar). Login returns `user.locale`. Numbers stay
+Western digits in both languages. The GHL install/OAuth pages are bilingual by `Accept-Language`.
+Work and break times use time pickers instead of free text.
+- **Home-made i18n** (`web/src/i18n.jsx`: provider + `t()`, dictionaries in `web/src/locales/ar.js`
+  and `en.js`) instead of a library: ~170 strings, no new dependency, no bundle cost. Guard tests
+  keep both dictionaries in sync and scan the source for hard-coded text.
+- **Company default + personal override** so a manager can pick the team language while an
+  individual employee can still choose theirs.
+- **Install pages by `Accept-Language`** — there is no logged-in user at that point.
+- **Rejected:** react-i18next (dependency and setup for ~170 strings); auto-detecting the browser
+  language for the app (GHL users' browsers do not reflect the language the company wants);
+  language per location only (no personal choice).
+- **Migration 006** (`settings.locale`, `employees.locale`) must be applied in production before
+  the code is deployed.
+
 ### 2026-09-29 — Activity from GHL is evidence and alerts, never the clock
 Owner wanted attendance driven by GHL activity (audit logs). Decision: manual start/stop
 stays the record of truth; activity only raises in-app alerts and marks sessions for the
