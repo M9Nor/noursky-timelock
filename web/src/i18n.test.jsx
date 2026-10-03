@@ -11,7 +11,7 @@ const ARABIC = /[؀-ۿ]/;
 const NATIVE_NAMES = new Set(["lang.switch", "settings.langAr"]);
 // Paths are relative to src/ and resolved from the web/ working directory (vitest runs there; import.meta.url is not a file: URL under jsdom).
 // Files whose user-visible text must come only from the dictionaries. Tasks 3–4 add theirs.
-const TRANSLATED_FILES = ["App.jsx", "components/TopBar.jsx"];
+const TRANSLATED_FILES = ["App.jsx", "components/TopBar.jsx", "components/EmployeeScreen.jsx", "components/MyHistory.jsx", "components/StopNoteDialog.jsx"];
 
 describe("dictionaries", () => {
   it("have the same keys", () => { expect(Object.keys(en).sort()).toEqual(Object.keys(ar).sort()); });

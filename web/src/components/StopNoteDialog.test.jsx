@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import StopNoteDialog from "./StopNoteDialog.jsx";
+import { I18nProvider } from "../i18n.jsx";
 
 describe("StopNoteDialog", () => {
   it("blocks an empty note when the note is required", () => {
@@ -53,5 +54,11 @@ describe("StopNoteDialog", () => {
     const describedBy = textarea.getAttribute("aria-describedby");
     expect(describedBy).toBeTruthy();
     expect(document.getElementById(describedBy).textContent).toBe("الملاحظة مطلوبة لإنهاء الدوام");
+  });
+
+  it("speaks English inside an English provider", () => {
+    render(<I18nProvider locale="en"><StopNoteDialog required onConfirm={() => {}} onCancel={() => {}} /></I18nProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm clock out" }));
+    expect(screen.getByText("A note is required to clock out")).toBeInTheDocument();
   });
 });
