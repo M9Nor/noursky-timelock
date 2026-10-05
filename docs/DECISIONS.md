@@ -248,3 +248,17 @@ currently trigger a harmless rebuild.
   late-event rule keep it fair. "End at last activity" stays deferred (no automatic pay effect).
 - **Rejected:** auto-closing the alert on resume (the manager would miss the stretch); browser
   notifications and GHL SMS/WhatsApp (permission prompts inside the iframe; cost).
+
+## 2026-10-05 — Idle needs a connected location, not a recent event
+- **Decision:** idle time, the idle alert and session summaries require only that the location is
+  connected (`ghl_installs` installed, not uninstalled, with `conversations/message.readonly`). The
+  24 h "an event reached the location" outage guard is gone. A connected location with no message
+  at all still gets the idle alert once `idle_minutes` pass, and its closed sessions store
+  "0 activity" instead of "—".
+- **Reason:** the owner tested on Innova with a 1-minute threshold and got no alert: no event had
+  arrived since 2026-10-02, so the guard skipped the whole location. The owner wants the alert
+  whenever the time passes, message or not.
+- **Rejected:** keeping the 24 h guard (alerts silently never come on a quiet day); dropping every
+  guard (a location without the app or scope would alert every employee on every shift).
+- **Accepted cost:** a GHL webhook outage, or a team working only on channels that are not counted
+  (WhatsApp not yet verified), now produces idle alerts. Keep monitoring off for such clients.

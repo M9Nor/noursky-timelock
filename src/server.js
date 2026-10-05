@@ -319,26 +319,36 @@ async function lastEventAt(loc, uid, from, to) {
   return row?.at == null ? null : Number(row.at);
 }
 
+const ACTIVITY_SCOPE = "conversations/message.readonly";
+const hasActivityScope = (scopes) => String(scopes ?? "").split(/[\s,]+/).includes(ACTIVITY_SCOPE);
+
+/**
+ * Whether the location can report activity: the app is installed there with the activity
+ * scope — what the settings show as connected. Idle time, idle alerts and session summaries
+ * need it, and nothing more: they do not wait for an event in the last 24 h, so a quiet
+ * location still gets its idle alert once the threshold passes (owner, 2026-10-05).
+ */
+async function activityConnected(loc) {
+  const [row] = await q(
+    "SELECT scopes, installed_at, uninstalled_at FROM ghl_installs WHERE location_id = :loc",
+    { loc }
+  );
+  return Boolean(row?.installed_at && !row?.uninstalled_at) && hasActivityScope(row?.scopes);
+}
+
 /**
  * Computes and stores one closed session's activity summary (spec §5.6). Used for every
  * close path via summarizeClosedSessions, and directly after a manager edit, which must
  * refill the summary however old the session is (summaries are kept forever). A location
  * that never had monitoring has no activity_monitoring_since, and sessionSummary returns
- * null for a session monitoring did not cover. Outage guard: with no event at all at the
- * location in the 24 h before the session ended, the summary stays NULL ("—") instead of
- * being stored as "0 activity, long idle" — the location may not send events (not updated
- * to the 2.0.0 app, a GHL outage).
+ * null for a session monitoring did not cover. A location that is not connected (no
+ * activity scope) keeps NULL ("—"): it cannot report events, so "0 activity" would be false.
  */
 async function summarizeSession(loc, st, session) {
   if (st?.activity_monitoring_since == null) return;
   const since = Number(st.activity_monitoring_since);
   const start = Number(session.started_at), end = Number(session.ended_at);
-  const [fresh] = await q(
-    `SELECT 1 AS ok FROM activity_events
-      WHERE location_id = :loc AND occurred_at > :from AND occurred_at <= :end LIMIT 1`,
-    { loc, from: end - 86400, end }
-  );
-  if (!fresh) return;
+  if (!(await activityConnected(loc))) return;
   const sum = sessionSummary({
     startedAt: start, endedAt: end, monitoringSince: since,
     eventTimes: await eventTimes(loc, session.user_id, start, end),
@@ -389,9 +399,8 @@ async function summarizeClosedSessions(loc = null) {
 
 /**
  * Per-employee activity for the live floor (spec §5.3): idle seconds of open sessions, and
- * who is working without a session. Idle is null when monitoring is off or when the
- * location's newest event is over 24 h old (outage guard — other apps' events also refresh
- * ghl_installs.last_event_at, so that column is not used here).
+ * who is working without a session. Idle is null when monitoring is off or the location is
+ * not connected.
  */
 async function liveActivity(loc, st, employees, t) {
   const blank = () => ({ last_activity_at: null, idle_sec: null, active_without_session: false });
@@ -403,11 +412,7 @@ async function liveActivity(loc, st, employees, t) {
     { loc }
   );
   for (const r of nci) if (out.has(r.user_id)) out.get(r.user_id).active_without_session = true;
-  const [fresh] = await q(
-    "SELECT 1 AS ok FROM activity_events WHERE location_id = :loc AND occurred_at > :cutoff LIMIT 1",
-    { loc, cutoff: t - 86400 }
-  );
-  if (!fresh) return out;
+  if (!(await activityConnected(loc))) return out;
   for (const e of employees) {
     if (!e.session_id) continue;
     const start = Number(e.started_at);
@@ -428,7 +433,7 @@ async function liveActivity(loc, st, employees, t) {
  * before the alert and live reads (the employee's own poll passes `uid` and scans only that
  * employee's session). ux_alert_idle_open keeps one ongoing alert per session; a stretch
  * already alerted (same session and from_at) is never alerted again, even after a dismiss.
- * Outage guard: no alert unless the location received an event in the last 24 h.
+ * No alert at a location that is not connected; a connected one needs no recent event.
  */
 async function detectIdle(loc = null, uid = null) {
   const locs = loc
@@ -439,11 +444,7 @@ async function detectIdle(loc = null, uid = null) {
     try {
       const st = await getSettings(l);
       if (!st?.activity_monitoring) continue;
-      const [fresh] = await q(
-        "SELECT 1 AS ok FROM activity_events WHERE location_id = :loc AND occurred_at > :cutoff LIMIT 1",
-        { loc: l, cutoff: t - 86400 }
-      );
-      if (!fresh) continue;
+      if (!(await activityConnected(l))) continue;
       const open = await q(
         `SELECT id, user_id, started_at FROM sessions
           WHERE location_id = :loc AND ended_at IS NULL AND (:uid IS NULL OR user_id = :uid)`,
@@ -1205,8 +1206,6 @@ app.get("/admin/settings", authed, managerOnly, async (c) => {
 });
 
 // The read scope our Marketplace app requests for activity (spec §3).
-const ACTIVITY_SCOPE = "conversations/message.readonly";
-
 app.get("/admin/ghl-connection", authed, managerOnly, async (c) => {
   await purgeOldActivity();
   const { loc } = c.get("claims");
@@ -1226,10 +1225,9 @@ app.get("/admin/ghl-connection", authed, managerOnly, async (c) => {
       WHERE a.location_id = :loc AND a.user_id IS NOT NULL AND a.occurred_at >= :since AND e.user_id IS NULL`,
     { loc, since: now() - 7 * 86400 }
   );
-  const scopes = String(row?.scopes ?? "").split(/[\s,]+/).filter(Boolean);
   return c.json({
     installed: Boolean(row?.installed_at && !row?.uninstalled_at),
-    has_activity_scope: scopes.includes(ACTIVITY_SCOPE),
+    has_activity_scope: hasActivityScope(row?.scopes),
     last_event_at: row?.last_event_at == null ? null : Number(row.last_event_at),
     events_24h: Number(cnt.n),
     unknown_active_users: Number(unknown.n),

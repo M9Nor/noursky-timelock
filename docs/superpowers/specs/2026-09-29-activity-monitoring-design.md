@@ -219,9 +219,10 @@ event in the session. Idle seconds = `now − last activity`, **minus** break ti
 `idle_minutes` (default 30, 1–240). Phase B wrote no alert row; phase C opens an `idle`
 alert (§12).
 
-**Outage guard:** idle is shown only when the location's latest `activity_events` row is
-less than 24 hours old. (`ghl_installs.last_event_at` is not used for this: other apps'
-signed events also refresh it.)
+**Connection guard** (replaces the 24 h outage guard, owner 2026-10-05): idle is shown only
+when the location is connected — `ghl_installs` installed, not uninstalled, with the
+`conversations/message.readonly` scope. No recent event is needed: a quiet location still
+shows idle and gets its alert once the threshold passes.
 
 ### 5.4 Manager actions — `/admin/alerts`
 - `GET /admin/alerts?status=open` — list with employee name, kind, `from_at`, employee note.
@@ -229,7 +230,7 @@ signed events also refresh it.)
   otherwise `404 ALERT_NOT_FOUND`. A dismissed alert does not suppress later ones: the next
   qualifying event opens a new alert (owner, 2026-10-02).
 - `GET /admin/live` gains, per open session, `last_activity_at` and `idle_sec` (NULL when
-  monitoring is off or the outage guard applies), and per offline employee
+  monitoring is off or the location is not connected), and per offline employee
   `active_without_session` (true while a not-clocked-in alert is open).
 - `GET /admin/sessions` and the CSV gain `activity_count` and `longest_idle_sec`.
 - `GET /admin/ghl-connection` gains `unknown_active_users` = number of distinct
@@ -254,9 +255,8 @@ manager edit), and recomputed when a manager edits a closed session, only if mon
 was on for any part of it. Only counted events (with `user_id`) are used:
 `activity_count`, `last_activity_at`, and `longest_idle_sec` = the longest gap between
 consecutive points {start, events…, end}, **with break time (employee and fixed)
-removed from each gap**. Outage guard: if no event at all reached the location in the 24 h
-before the session ended, the summary is left empty (null, shown "—") rather than stored as
-"0 activity". A manager edit refills the summary whatever the session's age.
+removed from each gap**. At a location that is not connected the summary is left empty
+(null, shown "—"); a connected one stores it even with no event ("0 activity"). A manager edit refills the summary whatever the session's age.
 
 ### 5.7 Retention
 Every 15 minutes (timer) and lazily: `DELETE FROM activity_events WHERE occurred_at < now − 90 days` (the lazy run is on `GET /admin/ghl-connection`).
@@ -349,7 +349,8 @@ observe a few days with the manager, then offer to other clients.
   phase-A verification step, not a guess built into phase B.
 - Money: zero added cost (webhooks and OAuth are free; no premium workflow trigger).
 - Fairness: activity never changes hours by itself; every alert is answerable by the
-  employee; outages and late events cannot create idle alerts.
+  employee; late events cannot create idle alerts. Since 2026-10-05 an outage at a connected
+  location can (accepted by the owner: the alert must come once the threshold passes).
 - Privacy: no content stored; raw events kept 90 days; summaries and alerts kept.
 
 ## 11. Deferred (decided 2026-10-02)
@@ -375,7 +376,8 @@ the app with a one-minute refresh (option A, no cost).
 ### 12.1 Detection
 A detector runs every **60 seconds** and lazily before `GET /admin/live`, `GET /admin/alerts`
 and `GET /me/alerts`. For each open session at a location with `activity_monitoring = 1`:
-- **Outage guard:** skip the location unless it has an `activity_events` row from the last 24 h.
+- **Connection guard:** skip the location unless it is connected (installed with the activity
+  scope). No recent event is required (owner, 2026-10-05).
 - **Last activity** = the latest of `session.started_at`, `activity_monitoring_since`, and the
   employee's last counted event (with `user_id`) since the session started.
 - **Idle seconds** = time from last activity to now **minus breaks** (employee breaks and the
@@ -423,8 +425,8 @@ and `GET /me/alerts`. For each open session at a location with `activity_monitor
 ### 12.5 Testing
 - Unit: the detector's pure decision (threshold reached / not, on a break, inside the fixed
   window, monitoring start) and the late-event rule.
-- Smoke: opens after the threshold (backdated session); not during a break; not without events
-  in 24 h; one ongoing per session; an event sets `to_at` and hides it from `/me/alerts`; a late
+- Smoke: opens after the threshold (backdated session); not during a break; not while the location is
+  not connected, but yes when connected with no event at all; one ongoing per session; an event sets `to_at` and hides it from `/me/alerts`; a late
   event inside the gap resolves it `late_activity`; stopping sets `to_at`; dismiss and note on an
   idle alert; `idle_minutes` 1 accepted, 0 rejected.
 - Frontend: idle rows (ongoing / ended), employee idle banner, periodic refresh, ⚠️ title.

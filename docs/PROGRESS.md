@@ -8,6 +8,7 @@ _(overwrite each update)_
   `147c41c`, migration 006 applied 2026-10-03) are all live. Marketplace **2.0.1** published 2026-10-03
   (patch, reaches 2.x installs automatically): the GHL sidebar label is now always **"TimeClock"**
   (Custom Page title; previously "الدوام"). English client guide `b63736d5…` in the owner's Claude Docs.
+  2026-10-05: idle alerts no longer need a recent event, only a connected location.
 - **Next — pilot period (owner, 2026-10-02):** clients try the app free for a first period; feedback
   decides pricing and what comes next. Per-client onboarding checklist and the client guide live in the
   owner's Claude Docs (internal guide `ac3e1e8b…`, client guide `e5529e64…`). Per client: install 2.0.1, choose the company language,
@@ -72,6 +73,14 @@ _(overwrite each update)_
 
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
+
+- **2026-10-05** · **Idle alert without any event.** Owner tested on Innova (threshold 1 min) and got
+  no alert: no event had reached the location since 2026-10-02, so the 24 h outage guard skipped it.
+  The guard is now "connected" (installed + activity scope) for idle time, the idle alert and session
+  summaries (DECISIONS). Also: the 2026-10-03 Hostinger deploy of b969af5 (docs only) failed with
+  "Failed to clone the repository" — production stayed on 007924c; check the next deploy log.
+  Client guide PDF and internal install guide PDF made (owner's files, not in the repo). Verified:
+  smoke 210/0, unit 53/0, frontend 154/0. · files: src/server.js, scripts/smoke-test.mjs, spec, DECISIONS
 
 - **2026-10-03** · **Arabic + English** on `feature/bilingual` (subagent-driven, plan
   `docs/superpowers/plans/2026-10-03-bilingual.md`). Migration 006 (`settings.locale`,

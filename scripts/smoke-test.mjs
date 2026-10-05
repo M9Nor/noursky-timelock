@@ -135,6 +135,13 @@ async function localRows(sql, params) {
   return skipped ? null : rows;
 }
 
+// Marks a location as connected the way /oauth/callback does: installed, with the activity scope.
+const connectActivity = (loc) => localRows(
+  `INSERT INTO ghl_installs (location_id, scopes, installed_at, updated_at)
+   VALUES (:loc, 'users.readonly conversations/message.readonly', :t, :t)
+   ON DUPLICATE KEY UPDATE scopes = VALUES(scopes), installed_at = VALUES(installed_at), uninstalled_at = NULL`,
+  { loc, t: Math.floor(Date.now() / 1000) });
+
 console.log(`Smoke test → ${BASE} (location ${LOC})`);
 
 const health = await fetch(`${BASE}/health`).then((r) => r.json()).catch(() => null);
@@ -1014,12 +1021,14 @@ if (!awAcceptsTestKey || idBack.skipped) {
 } else {
   await call(IDE, "POST", "/session/start");
   await localRows("UPDATE sessions SET started_at = :s WHERE location_id = :loc AND ended_at IS NULL", { s: idT - 3600, loc: IDLOC });
-  check("no idle time is shown before any event has arrived (outage guard)", (await idMe())?.idle_sec === null);
+  check("no idle time is shown while the location is not connected", (await idMe())?.idle_sec === null);
 
-  await idEvent(`${IDLOC}-stranger`); // someone who never opened TimeClock: proves events arrive
+  await connectActivity(IDLOC);
   const idIdle = await idMe();
-  check("an open session with no activity for an hour shows about an hour idle",
+  check("connected with no event at all, an open session with no activity for an hour shows about an hour idle",
     Math.abs(Number(idIdle?.idle_sec) - 3600) <= 10 && idIdle?.last_activity_at === null, `(${JSON.stringify(idIdle)})`);
+
+  await idEvent(`${IDLOC}-stranger`); // someone who never opened TimeClock
   check("unknown active users are counted for the connection status",
     (await call(IDM, "GET", "/admin/ghl-connection")).body?.unknown_active_users === 1);
 
@@ -1045,12 +1054,12 @@ if (!awAcceptsTestKey || idBack.skipped) {
 
   await localRows("DELETE FROM activity_events WHERE location_id = :loc", { loc: IDLOC });
   await call(IDE, "POST", "/session/start");
-  check("with no event in 24 hours idle is not shown", (await idMe())?.idle_sec === null);
+  check("connected with no event in 24 hours idle is still shown", (await idMe())?.idle_sec != null);
   await call(IDE, "POST", "/session/stop");
   const idSilent = (await call(IDM, "GET", `/admin/sessions?from=${idT - 86400}&to=${idEditEnd + 600}&user_id=${IDLOC}-u1`)).body?.sessions
     ?.find((x) => x.id !== idS?.id);
-  check("with no event at the location in the 24 h before it ended, a stopped session keeps a null summary",
-    idSilent && idSilent.ended_at != null && idSilent.activity_count == null && idSilent.longest_idle_sec == null,
+  check("connected with no event in the 24 h before it ended, a stopped session stores a zero-activity summary",
+    idSilent && idSilent.ended_at != null && idSilent.activity_count === 0 && idSilent.longest_idle_sec != null,
     `(${JSON.stringify(idSilent)})`);
 
   // A manager edit refills the summary however old the session is (summaries are kept forever).
@@ -1104,11 +1113,11 @@ if (!awAcceptsTestKey || icBack.skipped) {
 } else {
   await call(ICE, "POST", "/session/start");
   await icBackdate(600);
-  check("no idle alert while no event reached the location in 24 hours", (await icIdle()).length === 0);
+  check("no idle alert while the location is not connected", (await icIdle()).length === 0);
 
-  await icEvent(`${ICLOC}-stranger`); // someone who never opened TimeClock: proves events arrive
+  await connectActivity(ICLOC);
   const icA = (await icIdle())[0];
-  check("an idle alert opens once the threshold is passed",
+  check("connected, an idle alert opens once the threshold is passed even with no event at all",
     icA?.session_id && icA.to_at === null && Math.abs(Number(icA.from_at) - (icT - 600)) <= 10 && icA.name === "موظف الخمول ج",
     `(${JSON.stringify(icA)})`);
   check("one ongoing idle alert per session", (await icIdle()).length === 1);
