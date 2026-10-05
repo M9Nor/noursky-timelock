@@ -78,7 +78,8 @@ _(append-only, newest on top: date · summary · files · commit)_
   no alert: no event had reached the location since 2026-10-02, so the 24 h outage guard skipped it.
   The guard is now "connected" (installed + activity scope) for idle time, the idle alert and session
   summaries (DECISIONS). Also: the 2026-10-03 Hostinger deploy of b969af5 (docs only) failed with
-  "Failed to clone the repository" — production stayed on 007924c; check the next deploy log.
+  "Failed to clone the repository" — production stayed on 007924c; the next deploy (9e47002, this fix)
+  completed fine on 2026-10-05 (deploy log checked, `activityConnected` in the running build).
   Client guide PDF and internal install guide PDF made (owner's files, not in the repo). Verified:
   smoke 210/0, unit 53/0, frontend 154/0. · files: src/server.js, scripts/smoke-test.mjs, spec, DECISIONS
 
