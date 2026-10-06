@@ -44,7 +44,7 @@ export default function LiveFloor({ api }) {
               ? <div className="m break">{t("live.break", { dur: formatDuration(nowS - p.break_started_at) })}</div>
               : inFixed
                 ? <div className="m break">{t("live.breakTime")}</div>
-                : <div className="m">{formatDuration(nowS - p.started_at)}</div>)}
+                : <div className="m">{formatDuration(nowS - p.started_at - (p.break_sec ?? 0))}</div>)}
             {live && !p.break_started_at && !inFixed && isIdle(p) && (
               <div className="m warn">{t("live.idle", { dur: formatIdle(idleNow(p), locale) })}</div>
             )}

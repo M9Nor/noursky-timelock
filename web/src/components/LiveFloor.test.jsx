@@ -20,6 +20,16 @@ describe("LiveFloor", () => {
     expect(screen.getByText("غير متصل").closest(".lane").textContent).toContain("سارة");
   });
 
+  it("shows worked time without the session's past breaks, like the employee's own timer", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const api = { get: vi.fn(async () => ({
+      server_time: now,
+      employees: [{ user_id: "a", name: "أحمد", session_id: "s1", started_at: now - 3600, break_started_at: null, break_sec: 600 }],
+    })) };
+    render(<LiveFloor api={api} />);
+    expect(await screen.findByText(/^0:50:0\d$/)).toBeInTheDocument();
+  });
+
   it("marks an employee who is on a break", async () => {
     const now = Math.floor(Date.now() / 1000);
     const api = { get: vi.fn(async () => ({

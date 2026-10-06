@@ -921,16 +921,19 @@ app.get("/admin/live", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
   await autoCloseStale(loc);
   await detectIdle(loc).catch((e) => console.error("[idle-detect]", e));
-  const employees = await q(
-    `SELECT e.user_id, e.name, e.email, s.id AS session_id, s.started_at, b.started_at AS break_started_at
+  const t = now();
+  // break_sec: the open session's break time up to now — the same figure /me/status gives the
+  // employee, so the live floor shows the same net worked time as the employee's own timer.
+  const employees = (await q(
+    `SELECT e.user_id, e.name, e.email, s.id AS session_id, s.started_at, b.started_at AS break_started_at,
+            IF(s.id IS NULL, NULL, ${BREAK_SEC_EXPR}) AS break_sec
        FROM employees e
        LEFT JOIN sessions s ON s.user_id = e.user_id AND s.location_id = e.location_id AND s.ended_at IS NULL
        LEFT JOIN breaks b ON b.session_id = s.id AND b.ended_at IS NULL
       WHERE e.location_id = :loc AND e.is_active = 1
       ORDER BY s.started_at IS NULL, e.name`,
-    { loc }
-  );
-  const t = now();
+    { loc, now: t }
+  )).map((e) => ({ ...e, break_sec: e.break_sec == null ? null : Number(e.break_sec) }));
   const st = await getSettings(loc);
   const activity = await liveActivity(loc, st, employees, t);
   return c.json({

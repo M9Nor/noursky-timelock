@@ -74,6 +74,12 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-10-06** · **Live floor shows net time.** The manager's "الفريق الآن" timer counted the session's
+  breaks (now − start) while the employee's timer subtracts them. `GET /admin/live` now returns
+  `break_sec` per open session (same BREAK_SEC_EXPR as `/me/status`) and the floor shows now − start −
+  break_sec. Verified: smoke 211/0, unit 53/0, frontend 166/0, local browser (both timers 0:00:09 after an
+  8 s break). · files: src/server.js, LiveFloor (+test), smoke
+
 - **2026-10-06** · **Faster clock-out.** The owner saw a few seconds' delay after "end shift": the screen
   waited for 4 requests in a row (stop, status, week, alerts; ~0.2 s round trip each from Turkey plus
   the server). The three reads now go out together (2 rounds). The server logs `[slow] METHOD /path
