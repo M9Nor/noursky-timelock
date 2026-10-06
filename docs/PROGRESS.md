@@ -74,6 +74,15 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-10-06** · **Live refresh.** Verified on Innova that the idle alert now reaches the manager
+  without any event (fix of 2026-10-05). The owner saw the employee's idle banner only after a reload:
+  new `usePolling` hook (30 s + at once on tab return) on the employee screen, alerts and live floor;
+  history reloads with each re-read and after actions; the report re-reads every minute (DECISIONS).
+  Also corrected the guides: an Admin account cannot clock in (the employee/manager switch is
+  dev/preview only). Verified: frontend 164/0, build ok, local browser run (poll every 30 s, banner
+  without reload). · files: web/src/usePolling.js (+test), EmployeeScreen, MyHistory, AlertsPanel,
+  LiveFloor, ReportPanel (+tests), CLAUDE.md, DECISIONS
+
 - **2026-10-05** · **Idle alert without any event.** Owner tested on Innova (threshold 1 min) and got
   no alert: no event had reached the location since 2026-10-02, so the 24 h outage guard skipped it.
   The guard is now "connected" (installed + activity scope) for idle time, the idle alert and session

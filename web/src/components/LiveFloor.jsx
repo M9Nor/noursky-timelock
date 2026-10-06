@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import KpiRow from "./KpiRow.jsx";
 import { useI18n } from "../i18n.jsx";
+import { usePolling } from "../usePolling.js";
 import { formatDuration, formatIdle, serverOffset, nowWithOffset } from "../time.js";
 
 export default function LiveFloor({ api }) {
@@ -17,10 +18,10 @@ export default function LiveFloor({ api }) {
   }
   useEffect(() => {
     refresh().catch(() => {});
-    const poll = setInterval(() => refresh().catch(() => {}), 30000);
     const tick = setInterval(() => setTick((x) => x + 1), 1000);
-    return () => { clearInterval(poll); clearInterval(tick); };
+    return () => clearInterval(tick);
   }, []);
+  usePolling(refresh, 30000);
 
   if (!data) return <div className="panel muted">{t("common.loading")}</div>;
   const nowS = nowWithOffset(offsetRef.current);

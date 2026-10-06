@@ -43,6 +43,7 @@ web/                     # React + Vite SPA (source of the UI)
   src/i18n.jsx           # language provider + t() (home-made, no library); company default + personal override
   src/locales/           # ar.js / en.js dictionaries (every user-visible string; guard tests keep keys in sync)
   src/alertTitle.js      # ⚠️ tab-title hook while an alert is shown
+  src/usePolling.js      # periodic re-read + at once when the tab is visible/focused again (all live panels use it)
   src/styles.css         # NourSky design system (light theme, class-based)
   src/components/        # Icon, Button, Toast, TopBar, EmployeeScreen, KpiRow, LiveFloor,
                          #   ReportPanel, SessionEditModal, SettingsPanel, ManagerDashboard,

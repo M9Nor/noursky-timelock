@@ -7,6 +7,7 @@ import MyHistory from "./MyHistory.jsx";
 import StopNoteDialog from "./StopNoteDialog.jsx";
 import { useAlertTitle } from "../alertTitle.js";
 import { useI18n } from "../i18n.jsx";
+import { usePolling } from "../usePolling.js";
 
 // Error state holds dictionary keys (not text) so a message follows a language switch.
 const GENERIC_ERROR = "err.generic";
@@ -70,11 +71,14 @@ export default function EmployeeScreen({ api, user }) {
     })();
   }, [api]);
 
-  // Alerts appear without a reload: the screen re-reads status and alerts every minute.
-  useEffect(() => {
-    const id = setInterval(() => refresh().catch(() => {}), 60000);
-    return () => clearInterval(id);
-  }, []);
+  // Status, alerts and the history appear without a reload: re-read every 30 s, and at once
+  // when the employee comes back to the tab.
+  const [historyKey, setHistoryKey] = useState(0);
+  async function reloadAll() {
+    await refresh();
+    setHistoryKey((k) => k + 1);
+  }
+  usePolling(reloadAll, 30000);
 
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
@@ -97,7 +101,7 @@ export default function EmployeeScreen({ api, user }) {
     if (dialog) setNoteError(""); else setError("");
     try {
       await action();
-      await refresh();
+      await reloadAll();
       toast(message);
       return true;
     } catch (e) {
@@ -252,7 +256,7 @@ export default function EmployeeScreen({ api, user }) {
         <p className="hero-meta"><span>{t("employee.weekTotal")}<strong className="ltr">{formatHours(weekSec)}</strong></span></p>
       </section>
 
-      <MyHistory api={api} />
+      <MyHistory api={api} reloadKey={historyKey} />
 
       {askNote && (
         <StopNoteDialog required={policy.note_on_stop === "required"} loading={loading} error={noteError ? t(noteError) : ""}

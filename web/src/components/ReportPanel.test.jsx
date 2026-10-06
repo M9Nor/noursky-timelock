@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ToastProvider } from "./ToastContext.jsx";
 import { I18nProvider } from "../i18n.jsx";
 import ReportPanel from "./ReportPanel.jsx";
@@ -18,6 +18,22 @@ function makeApi({ work_start = "09:00", employees, sessions = [], timezone = "A
 }
 
 describe("ReportPanel", () => {
+  it("re-reads the report every minute and when the page becomes visible", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const api = makeApi();
+      wrap(<ReportPanel api={api} />);
+      const reads = () => api.get.mock.calls.filter(([p]) => p.startsWith("/admin/report")).length;
+      await waitFor(() => expect(reads()).toBe(1));
+      await act(async () => { vi.advanceTimersByTime(60000); });
+      await waitFor(() => expect(reads()).toBe(2));
+      await act(async () => { vi.advanceTimersByTime(5000); document.dispatchEvent(new Event("visibilitychange")); });
+      await waitFor(() => expect(reads()).toBe(3));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders per-employee hours", async () => {
     wrap(<ReportPanel api={makeApi()} />);
     expect(await screen.findByText("أحمد")).toBeInTheDocument();
