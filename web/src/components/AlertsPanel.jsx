@@ -4,6 +4,7 @@ import { useToast } from "./ToastContext.jsx";
 import { formatTime, formatIdle } from "../time.js";
 import { useAlertTitle } from "../alertTitle.js";
 import { useI18n } from "../i18n.jsx";
+import { usePolling } from "../usePolling.js";
 
 const DAY = 86400;
 
@@ -35,11 +36,8 @@ export default function AlertsPanel({ api }) {
     );
     setData({ alerts: d.alerts ?? [], notes, timezone: d.timezone ?? null, serverNow: d.server_time ?? null });
   }
-  useEffect(() => {
-    load().catch(() => {});
-    const poll = setInterval(() => load().catch(() => {}), 60000);
-    return () => clearInterval(poll);
-  }, []);
+  useEffect(() => { load().catch(() => {}); }, []);
+  usePolling(load, 30000);
 
   async function dismiss(id) {
     try {

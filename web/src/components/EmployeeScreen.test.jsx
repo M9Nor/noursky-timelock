@@ -371,18 +371,39 @@ describe("EmployeeScreen", () => {
     await waitFor(() => expect(api.post).toHaveBeenCalledWith("/me/alerts/i1/note", { note: "كنت بمكالمة" }));
   });
 
-  it("refreshes status and alerts every minute", async () => {
+  const callsTo = (api, prefix) => api.get.mock.calls.filter(([p]) => p && p.startsWith(prefix)).length;
+
+  it("refreshes status, alerts and history every 30 seconds", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const api = withAlerts(makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() }), { alerts: [], timezone: "UTC" });
       wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
       await waitFor(() => expect(api.get).toHaveBeenCalledWith("/me/alerts"));
-      const before = api.get.mock.calls.filter(([p]) => p === "/me/alerts").length;
-      await act(async () => { vi.advanceTimersByTime(60000); });
-      await waitFor(() => expect(api.get.mock.calls.filter(([p]) => p === "/me/alerts").length).toBeGreaterThan(before));
+      await waitFor(() => expect(callsTo(api, "/me/sessions")).toBeGreaterThan(0));
+      const alerts = callsTo(api, "/me/alerts"), history = callsTo(api, "/me/sessions");
+      await act(async () => { vi.advanceTimersByTime(30000); });
+      await waitFor(() => expect(callsTo(api, "/me/alerts")).toBeGreaterThan(alerts));
+      await waitFor(() => expect(callsTo(api, "/me/sessions")).toBeGreaterThan(history));
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("refreshes at once when the page becomes visible again", async () => {
+    const api = withAlerts(makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() }), { alerts: [], timezone: "UTC" });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/me/alerts"));
+    const before = callsTo(api, "/me/alerts");
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    await waitFor(() => expect(callsTo(api, "/me/alerts")).toBeGreaterThan(before));
+  });
+
+  it("reloads the history right after clocking in", async () => {
+    const api = makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    fireEvent.click(await screen.findByRole("button", { name: /بدء الدوام/ }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/session/start"));
+    await waitFor(() => expect(callsTo(api, "/me/sessions")).toBeGreaterThanOrEqual(2));
   });
 
   it("marks the tab title while the employee has an alert", async () => {

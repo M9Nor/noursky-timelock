@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { formatHours, formatStamp } from "../time.js";
 import { useI18n } from "../i18n.jsx";
 
-export default function MyHistory({ api }) {
+// `reloadKey` changes whenever the employee screen re-reads its data (every poll, and after
+// clocking in or out), so the list does not wait for a page reload.
+export default function MyHistory({ api, reloadKey = 0 }) {
   const { t } = useI18n();
   const [sessions, setSessions] = useState(null);
   const [timezone, setTimezone] = useState(null);
@@ -13,7 +15,7 @@ export default function MyHistory({ api }) {
       // Times follow the company's timezone, not whatever the device is set to.
       .then((r) => { setTimezone(r.timezone ?? null); setSessions(r.sessions); })
       .catch(() => setError(true));
-  }, []);
+  }, [reloadKey]);
 
   if (error) return <section className="panel my-history error">{t("err.generic")}</section>;
   if (!sessions) return <section className="panel my-history muted">{t("history.loading")}</section>;

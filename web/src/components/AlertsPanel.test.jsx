@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ToastProvider } from "./ToastContext.jsx";
 import { I18nProvider } from "../i18n.jsx";
 import AlertsPanel from "./AlertsPanel.jsx";
@@ -8,6 +8,22 @@ const wrap = (ui) => render(<ToastProvider>{ui}</ToastProvider>);
 const at = Date.UTC(2026, 9, 5, 5, 5) / 1000; // 09:05 in Dubai
 
 describe("AlertsPanel", () => {
+  it("re-reads the alerts every 30 seconds and when the page becomes visible", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const api = { get: vi.fn(async () => ({ alerts: [], timezone: "Asia/Dubai" })), post: vi.fn() };
+      wrap(<AlertsPanel api={api} />);
+      const open = () => api.get.mock.calls.filter(([p]) => p === "/admin/alerts?status=open").length;
+      await waitFor(() => expect(open()).toBe(1));
+      await act(async () => { vi.advanceTimersByTime(30000); });
+      await waitFor(() => expect(open()).toBe(2));
+      await act(async () => { vi.advanceTimersByTime(5000); document.dispatchEvent(new Event("visibilitychange")); });
+      await waitFor(() => expect(open()).toBe(3));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders nothing without open alerts", async () => {
     const api = { get: vi.fn(async () => ({ alerts: [], timezone: "Asia/Dubai" })), post: vi.fn() };
     const { container } = wrap(<AlertsPanel api={api} />);

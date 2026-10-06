@@ -5,10 +5,12 @@ import { useToast } from "./ToastContext.jsx";
 import { formatHours, formatLateness, formatStamp, formatBreak, formatIdle } from "../time.js";
 import SessionEditModal from "./SessionEditModal.jsx";
 import { useI18n } from "../i18n.jsx";
+import { usePolling } from "../usePolling.js";
 
 export function todayRange() { const to = Math.floor(Date.now() / 1000); return { from: to - 86400, to }; }
 export function weekRange() { const to = Math.floor(Date.now() / 1000); return { from: to - 7 * 86400, to }; }
 export function monthRange() { const to = Math.floor(Date.now() / 1000); return { from: to - 30 * 86400, to }; }
+const PRESET_RANGES = { today: todayRange, week: weekRange, month: monthRange };
 
 const CLOSED_BY = new Set(["user", "auto", "admin"]);
 
@@ -39,6 +41,12 @@ export default function ReportPanel({ api }) {
     catch { setError("err.generic"); }
   }
   useEffect(() => { load(); }, [range.from, range.to]);
+  // A preset ends "now", so a re-read moves its end forward (the effect above loads it);
+  // custom dates are re-read as they are.
+  usePolling(async () => {
+    if (PRESET_RANGES[preset]) setRange(PRESET_RANGES[preset]());
+    else await load();
+  }, 60000);
 
   function pick(name, r) { setPreset(name); setRange(r); }
   function setCustom(which, value) {

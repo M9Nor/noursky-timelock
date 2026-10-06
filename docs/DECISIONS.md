@@ -262,3 +262,16 @@ currently trigger a harmless rebuild.
   guard (a location without the app or scope would alert every employee on every shift).
 - **Accepted cost:** a GHL webhook outage, or a team working only on channels that are not counted
   (WhatsApp not yet verified), now produces idle alerts. Keep monitoring off for such clients.
+
+## 2026-10-06 — Screens refresh every 30 s and when the tab comes back
+- **Decision:** one hook, `web/src/usePolling.js`, re-reads every interval **and at once when the page
+  becomes visible or the window gets focus** (one re-read for both, 2 s apart). Employee screen and the
+  manager's alerts and live floor: every 30 s (was 60 s for the first two). "My history" reloads with
+  every employee-screen re-read and right after clocking in/out or a break (it loaded once before). The
+  report re-reads every 60 s; a preset (today/week/month) moves its end to now, custom dates stay.
+- **Reason:** the owner saw the idle banner only after reloading the page. Locally the 60 s poll did show
+  it, but up to a minute after the threshold, and browsers slow or freeze timers in a background tab
+  (and the GHL iframe in it), so coming back to the tab showed stale data until the next tick. History
+  and the report never refreshed at all.
+- **Rejected:** server push (SSE/WebSocket: more moving parts on Hostinger for a one-minute need);
+  polling every 10 s (load for little gain once the return trigger exists).

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import MyHistory from "./MyHistory.jsx";
 
 describe("MyHistory", () => {
@@ -13,6 +13,14 @@ describe("MyHistory", () => {
     };
     render(<MyHistory api={api} />);
     expect(await screen.findByText("8.00")).toBeInTheDocument();
+  });
+
+  it("reloads when its reload key changes", async () => {
+    const api = { get: vi.fn(async () => ({ sessions: [] })) };
+    const { rerender } = render(<MyHistory api={api} reloadKey={0} />);
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1));
+    rerender(<MyHistory api={api} reloadKey={1} />);
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
   });
 
   it("flags auto-closed sessions", async () => {
