@@ -547,6 +547,16 @@ if (env.ALLOWED_ORIGIN) {
   }));
 }
 
+// Requests slower than this are logged (method, path and time only — no query, no body),
+// so a slow screen can be traced to the server or ruled out.
+const SLOW_REQUEST_MS = 500;
+app.use("*", async (c, next) => {
+  const t0 = performance.now();
+  await next();
+  const ms = Math.round(performance.now() - t0);
+  if (ms >= SLOW_REQUEST_MS) console.warn("[slow]", c.req.method, c.req.path, `${ms}ms`, c.res.status);
+});
+
 app.onError((err, c) => {
   if (err instanceof HttpError) return c.json({ error: err.code }, err.status);
   console.error(err);

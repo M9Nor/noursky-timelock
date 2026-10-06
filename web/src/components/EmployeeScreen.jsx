@@ -33,20 +33,23 @@ export default function EmployeeScreen({ api, user }) {
   const toast = useToast();
   const { t, locale } = useI18n();
 
+  // The three reads go out together: one round trip instead of three after every action.
+  // The week starts 7 days before the server's clock as last seen (the device clock on the
+  // first read); a few seconds of drift do not matter over a week.
   async function refresh() {
-    const s = await api.get("/me/status");
+    const weekFrom = Math.floor(nowWithOffset(offsetRef.current)) - 7 * 86400;
+    const [s, wk, a] = await Promise.all([
+      api.get("/me/status"),
+      api.get(`/me/status?since=${weekFrom}`),
+      // Alerts are a convenience: a failure here never blocks clocking in.
+      api.get("/me/alerts").catch(() => null),
+    ]);
     offsetRef.current = serverOffset(s.server_time);
     setStatus(s);
-    const weekFrom = s.server_time - 7 * 86400;
-    const wk = await api.get(`/me/status?since=${weekFrom}`);
     setWeekSec(wk.worked_sec);
-    // Alerts are a convenience: a failure here never blocks clocking in.
-    try {
-      const a = await api.get("/me/alerts");
-      setAlerts({ list: a.alerts ?? [], timezone: a.timezone ?? null, serverTime: a.server_time ?? null });
-    } catch {
-      setAlerts({ list: [], timezone: null, serverTime: null });
-    }
+    setAlerts(a
+      ? { list: a.alerts ?? [], timezone: a.timezone ?? null, serverTime: a.server_time ?? null }
+      : { list: [], timezone: null, serverTime: null });
   }
 
   useEffect(() => { refresh().catch(() => setError(GENERIC_ERROR)); }, []);
