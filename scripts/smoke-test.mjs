@@ -398,6 +398,9 @@ const afterBreak = await call(PE, "GET", "/me/status");
 check("status carries the closed break time of the open session",
   afterBreak.body?.open_break === null && afterBreak.body?.open_session?.break_sec === b1Stop.body?.duration_sec,
   `(${JSON.stringify(afterBreak.body?.open_session)})`);
+const p2LiveAfter = (await call(PM, "GET", "/admin/live")).body?.employees?.find((e) => e.user_id === `${P2LOC}-u1`);
+check("live floor carries the same break time as the employee's status",
+  p2LiveAfter?.break_sec === b1Stop.body?.duration_sec, `(${JSON.stringify(p2LiveAfter)})`);
 
 // Stopping during a second break ends that break at the same instant.
 const b2 = await call(PE, "POST", "/session/break/start");

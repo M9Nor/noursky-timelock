@@ -290,7 +290,7 @@ role === "admin"  أو  type === "agency"   →  manager
 
 | Method | Path | الوصف |
 |---|---|---|
-| GET | `/admin/live` | كل الموظفين مع الجلسة المفتوحة لكل واحد (المفتوحين أول شي)، ومع كل موظف `break_started_at` إذا هو باستراحة، و`fixed_break: {starts_at, ends_at, paid} \| null` (نافذة اليوم إذا `break_mode = fixed`)، و`idle_minutes` (`null` إذا المراقبة مطفية)، ومع كل موظف `last_activity_at` و`idle_sec` (ثواني بلا نشاط بالجلسة المفتوحة بدون الاستراحات؛ `null` إذا المراقبة مطفية أو ما وصل ولا حدث بآخر 24 ساعة) و`active_without_session` |
+| GET | `/admin/live` | كل الموظفين مع الجلسة المفتوحة لكل واحد (المفتوحين أول شي)، ومع كل موظف `break_started_at` إذا هو باستراحة و`break_sec` (وقت استراحات الجلسة المفتوحة لهلّق، نفس رقم `/me/status`؛ العدّاد = الآن − البداية − `break_sec`)، و`fixed_break: {starts_at, ends_at, paid} \| null` (نافذة اليوم إذا `break_mode = fixed`)، و`idle_minutes` (`null` إذا المراقبة مطفية)، ومع كل موظف `last_activity_at` و`idle_sec` (ثواني بلا نشاط بالجلسة المفتوحة بدون الاستراحات؛ `null` إذا المراقبة مطفية أو الحساب مو مربوط) و`active_without_session` |
 | GET | `/admin/report?from=&to=` | لكل موظف: `worked_sec`, `sessions_count`, `days_present`, `auto_closed` + `daily_target_hours`, `timezone` |
 | GET | `/admin/sessions?from=&to=&user_id=` | قائمة الجلسات (حد أقصى 1000)، `user_id` اختياري، مع `break_sec` لكل جلسة، و`note`، و`activity_count` و`longest_idle_sec` (`null` = ما كانت مراقبة، أو ما وصل أي حدث للموقع خلال الـ24 ساعة قبل انتهاء الجلسة) |
 | PATCH | `/admin/sessions/:id` | Body: `{ started_at, ended_at, reason }` — السبب إجباري |
