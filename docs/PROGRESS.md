@@ -74,6 +74,13 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-10-06** · **Faster clock-out.** The owner saw a few seconds' delay after "end shift": the screen
+  waited for 4 requests in a row (stop, status, week, alerts; ~0.2 s round trip each from Turkey plus
+  the server). The three reads now go out together (2 rounds). The server logs `[slow] METHOD /path
+  Nms status` for any request ≥ 500 ms (nodejs/console.log on Hostinger) to trace any remaining delay.
+  Verified: frontend 165/0, smoke 210/0, unit 53/0, local browser timing. · files: EmployeeScreen (+test),
+  src/server.js
+
 - **2026-10-06** · **Live refresh.** Verified on Innova that the idle alert now reaches the manager
   without any event (fix of 2026-10-05). The owner saw the employee's idle banner only after a reload:
   new `usePolling` hook (30 s + at once on tab return) on the employee screen, alerts and live floor;

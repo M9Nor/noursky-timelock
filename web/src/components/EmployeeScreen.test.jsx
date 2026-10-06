@@ -398,6 +398,23 @@ describe("EmployeeScreen", () => {
     await waitFor(() => expect(callsTo(api, "/me/alerts")).toBeGreaterThan(before));
   });
 
+  it("asks for status, the week and alerts together, not one after another", async () => {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const status = { open_session: null, worked_sec: 0, server_time: nowSec() };
+    const api = makeApi(status);
+    const base = api.get;
+    // /me/status answers only after the alerts were requested: a sequential refresh never gets there.
+    api.get = vi.fn((path) => {
+      if (path === "/me/status") return gate.then(() => status);
+      if (path === "/me/alerts") { release(); return Promise.resolve({ alerts: [], timezone: "UTC" }); }
+      return base(path);
+    });
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    expect(await screen.findByRole("button", { name: /بدء الدوام/ })).toBeInTheDocument();
+    expect(api.get.mock.calls.some(([p]) => /^\/me\/status\?since=\d+$/.test(p ?? ""))).toBe(true);
+  });
+
   it("reloads the history right after clocking in", async () => {
     const api = makeApi({ open_session: null, worked_sec: 0, server_time: nowSec() });
     wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
