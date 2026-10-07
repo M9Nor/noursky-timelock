@@ -74,6 +74,12 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-10-07** · **Terra install fails** ("GHL رفض طلب الربط"). Log: `[oauth] OAUTH_EXCHANGE_FAILED 200`
+  twice (2026-10-06 10:42, 2026-10-07 09:31 UTC): GHL answered 200 but without `access_token`/`locationId`
+  — most likely an agency-level (Company / bulk) token, which the exchange does not support. The log now
+  adds the response shape (userType, bulk flag, error code, field names; never a token value) to confirm
+  on the next attempt. Unit 54/0. · files: src/ghlOAuth.js (+test), src/server.js
+
 - **2026-10-06** · **Live floor shows net time.** The manager's "الفريق الآن" timer counted the session's
   breaks (now − start) while the employee's timer subtracts them. `GET /admin/live` now returns
   `break_sec` per open session (same BREAK_SEC_EXPR as `/me/status`) and the floor shows now − start −

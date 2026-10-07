@@ -41,6 +41,16 @@ test("a token without a location throws (agency-level installs are not supported
   await assert.rejects(exchangeCode({ ...args, fetchImpl: fakeFetch(200, { access_token: "a", companyId: "c1" }) }), /OAUTH_EXCHANGE_FAILED/);
 });
 
+test("a refused exchange carries the response shape for the log, never a token value", async () => {
+  const err = await exchangeCode({ ...args, fetchImpl: fakeFetch(200, {
+    access_token: "SECRET-ACCESS", refresh_token: "SECRET-REFRESH", userType: "Company",
+    companyId: "c1", isBulkInstallation: true,
+  }) }).catch((e) => e);
+  assert.match(err.message, /OAUTH_EXCHANGE_FAILED/);
+  assert.equal(err.detail, "userType=Company bulk=true keys=access_token,companyId,isBulkInstallation,refresh_token,userType");
+  assert.ok(!JSON.stringify({ m: err.message, d: err.detail }).includes("SECRET"));
+});
+
 test("a network failure throws OAUTH_UNREACHABLE, not a refusal", async () => {
   const boom = async () => { throw new TypeError("fetch failed"); };
   await assert.rejects(exchangeCode({ ...args, fetchImpl: boom }), /OAUTH_UNREACHABLE/);
