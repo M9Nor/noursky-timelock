@@ -47,7 +47,8 @@ web/                     # React + Vite SPA (source of the UI)
   src/styles.css         # NourSky design system (light theme, class-based)
   src/components/        # Icon, Button, Toast, TopBar, EmployeeScreen, KpiRow, LiveFloor,
                          #   ReportPanel, SessionEditModal, SettingsPanel, ManagerDashboard,
-                         #   StopNoteDialog, MyHistory, AlertsPanel
+                         #   StopNoteDialog, MyHistory, AlertsPanel,
+                         #   EarlyLeaveDialog, MyEarlyLeave, EarlyLeavePanel (early-leave approval)
 public/                  # Vite build output (gitignored; produced at deploy)
 docs/                    # PROGRESS.md, DECISIONS.md, specs/, plans/, design-reference.html
 archive/cloudflare-worker/  # reference only — never edit or deploy

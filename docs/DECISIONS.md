@@ -275,3 +275,18 @@ currently trigger a harmless rebuild.
   and the report never refreshed at all.
 - **Rejected:** server push (SSE/WebSocket: more moving parts on Hostinger for a one-minute need);
   polling every 10 s (load for little gain once the return trigger exists).
+
+## 2026-10-07 — Early-leave approval
+- **Decision:** a per-company setting (`early_leave_approval`, off by default). With it on, ending a shift
+  before today's `work_end` (location timezone, working days only) needs a manager-approved request with
+  a required reason. Approval ends the session **at the approval moment** (`closed_by = 'approved'`,
+  note = reason, open break closed); rejection (optional note) keeps the employee clocked in and allows a
+  new request; one pending request per session; the employee may cancel; a pending request expires at
+  work end or when the session ends another way. Requests live in `early_leave_requests` and are never
+  edited or deleted; employee (own) and manager (all) read the history. Panels refresh each other after
+  a decision through a window event (`timeclock:refresh`, handled by `usePolling`).
+- **Reason:** the owner (Terra) wants employees not to leave before the shift ends without consent, and
+  every request and answer kept.
+- **Rejected:** reusing `activity_alerts` (different lifecycle, muddles the history); ending the session
+  at request time (owner chose the approval moment); a manager reason required on rejection (optional is
+  faster); making it always on (would trap employees of clients who never asked for it).
