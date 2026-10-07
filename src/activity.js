@@ -28,6 +28,27 @@ export function isWithinWorkHours(st, ts) {
   return ts >= wallToUtc(tz, day, st.work_start) && ts < wallToUtc(tz, day, st.work_end);
 }
 
+/** Today's work end (UNIX seconds) in the location's timezone, or null when hours are not set. */
+export function workEndAt(st, ts) {
+  if (!st?.work_start || !st?.work_end || st.work_start >= st.work_end) return null;
+  const tz = st.timezone || "Asia/Riyadh";
+  return wallToUtc(tz, localDate(tz, ts), st.work_end);
+}
+
+/**
+ * Early-leave rule (spec 2026-10-07 §2): ending the shift needs a manager's approval when the
+ * company turned it on, work hours are set, today is a working day and it is before today's
+ * work end. Before work start counts as before work end.
+ */
+export function earlyLeaveRequired(st, ts) {
+  if (!st?.early_leave_approval) return false;
+  const end = workEndAt(st, ts);
+  if (end == null) return false;
+  const days = st.work_days == null ? ALL_DAYS : Number(st.work_days);
+  if (!(days & (1 << localWeekday(st.timezone || "Asia/Riyadh", ts)))) return false;
+  return ts < end;
+}
+
 /** True for an event recent enough to open an alert (see ALERT_MAX_AGE_SEC / _SKEW_SEC). */
 export function isFreshEvent(occurredAt, now) {
   return occurredAt >= now - ALERT_MAX_AGE_SEC && occurredAt <= now + ALERT_MAX_SKEW_SEC;

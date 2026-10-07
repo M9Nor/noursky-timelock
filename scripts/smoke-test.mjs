@@ -101,7 +101,7 @@ async function withLocalDb(fn) {
 /** Best-effort removal of one fixture location's rows, so test data does not accumulate. */
 async function cleanupLocation(loc) {
   const { skipped } = await withLocalDb(async (conn) => {
-    for (const table of ["activity_events", "activity_alerts", "ghl_installs", "breaks", "edits_log", "sessions", "employees", "settings"]) {
+    for (const table of ["early_leave_requests", "activity_events", "activity_alerts", "ghl_installs", "breaks", "edits_log", "sessions", "employees", "settings"]) {
       await conn.execute(`DELETE FROM ${table} WHERE location_id = :loc`, { loc });
     }
   });

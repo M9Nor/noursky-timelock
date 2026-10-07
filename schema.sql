@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS settings (
   late_grace_minutes INT          NOT NULL DEFAULT 15,
   breaks_enabled     TINYINT(1)   NOT NULL DEFAULT 0,
   note_on_stop       ENUM('off','optional','required') NOT NULL DEFAULT 'off',
+  early_leave_approval TINYINT(1)   NOT NULL DEFAULT 0,  -- ending before work_end needs a manager's approval
   break_mode         ENUM('off','fixed','flexible') NOT NULL DEFAULT 'off',
   break_start        CHAR(5)      NULL,
   break_end          CHAR(5)      NULL,
@@ -48,7 +49,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   started_at   BIGINT      NOT NULL,
   ended_at     BIGINT      NULL,
   duration_sec BIGINT      NULL,
-  closed_by    ENUM('user','auto','admin') NULL,
+  closed_by    ENUM('user','auto','admin','approved') NULL,
   note         VARCHAR(500) NULL,
   activity_count   INT         NULL,
   last_activity_at BIGINT      NULL,
@@ -151,4 +152,23 @@ CREATE TABLE IF NOT EXISTS activity_alerts (
   UNIQUE KEY ux_alert_nci_open (location_id, user_id, nci_open_flag),
   KEY ix_alert_loc_status (location_id, status),
   KEY ix_alert_session (session_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One pending request per session; rows are never deleted (spec 2026-10-07).
+CREATE TABLE IF NOT EXISTS early_leave_requests (
+  id            CHAR(36)     NOT NULL PRIMARY KEY,
+  location_id   VARCHAR(64)  NOT NULL,
+  user_id       VARCHAR(64)  NOT NULL,
+  session_id    CHAR(36)     NOT NULL,
+  reason        VARCHAR(300) NOT NULL,
+  requested_at  BIGINT       NOT NULL,
+  work_end_at   BIGINT       NOT NULL,
+  status        ENUM('pending','approved','rejected','cancelled','expired') NOT NULL DEFAULT 'pending',
+  decided_by    VARCHAR(64)  NULL,
+  decided_at    BIGINT       NULL,
+  manager_note  VARCHAR(300) NULL,
+  pending_flag  TINYINT GENERATED ALWAYS AS (IF(status = 'pending', 1, NULL)) STORED,
+  UNIQUE KEY ux_early_leave_pending (session_id, pending_flag),
+  KEY ix_early_leave_loc_time (location_id, requested_at),
+  KEY ix_early_leave_user_time (location_id, user_id, requested_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

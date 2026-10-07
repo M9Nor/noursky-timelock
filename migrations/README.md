@@ -38,3 +38,4 @@ When adding a column: add it to `schema.sql` **and** add the next numbered file 
 | `004_activity_monitoring.sql` | 2026-09-30 | run manually in phpMyAdmin before activity monitoring phase A deploy |
 | `005_working_hours.sql` | 2026-10-02 | run manually in phpMyAdmin before activity monitoring phase B deploy |
 | `006_locale.sql` | 2026-10-03 | run manually in phpMyAdmin before the bilingual deploy |
+| `007_early_leave.sql` | (pending) | run manually in phpMyAdmin before the early-leave deploy |
