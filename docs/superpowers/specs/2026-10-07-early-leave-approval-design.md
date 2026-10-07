@@ -1,6 +1,6 @@
 # NourSky TimeClock — Early-leave approval (Design Spec)
 
-**Date:** 2026-10-07 · **Status:** implemented on `feature/early-leave`; migration 007 pending in production
+**Date:** 2026-10-07 · **Status:** implemented and deployed 2026-10-07 (migration 007 applied)
 
 ## 1. Goal
 

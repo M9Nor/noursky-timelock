@@ -77,7 +77,7 @@ _(append-only, newest on top: date · summary · files · commit)_
 - **2026-10-07** · **Early-leave approval** on `feature/early-leave` (plan
   `docs/superpowers/plans/2026-10-07-early-leave-approval.md`, executed inline). Migration 007
   (`settings.early_leave_approval`, `sessions.closed_by` += `approved`, table `early_leave_requests`) —
-  **NOT yet applied in production; apply in phpMyAdmin before merging/pushing.** Server: stop guard,
+  applied in production 2026-10-07 (owner, phpMyAdmin) before the merge. Server: stop guard,
   employee request/cancel/list, manager list/approve/reject, lazy expiry, `early_leave` in `/me/status`.
   Web: request dialog, pending/rejected/approved banners, "طلباتي", manager panel (pending + history with
   search), settings checkbox, report label, ⚠️ title counter, `timeclock:refresh` after a decision.
