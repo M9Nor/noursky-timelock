@@ -503,6 +503,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
     elPend.length === 1 && elPend[0].id === elR4.body?.id && elPend[0].name === "موظف الإنهاء", `(${JSON.stringify(elPend)})`);
   check("a manager note over 300 characters → 400",
     (await call(ELM, "POST", `/admin/early-leave/${elR4.body?.id}/reject`, { note: "x".repeat(301) })).body?.error === "NOTE_TOO_LONG");
+  await sleep(1100); // the rejection must be decided in a later second than the earlier cancel
   check("the manager rejects with a note",
     (await call(ELM, "POST", `/admin/early-leave/${elR4.body?.id}/reject`, { note: "خلّص الطلبية أول" })).status === 200);
   const elSt3 = (await call(ELE, "GET", "/me/status")).body;

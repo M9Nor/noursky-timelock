@@ -302,6 +302,9 @@ role === "admin"  أو  type === "agency"   →  manager
 | GET | `/admin/ghl-connection` | حالة الربط مع GHL لهالحساب: `{ installed, has_activity_scope, last_event_at, events_24h, unknown_active_users }`. `unknown_active_users` = مستخدمين إلهم نشاط بآخر 7 أيام وما فتحوا TimeClock |
 | GET | `/admin/alerts?status=` | تنبيهات النشاط: `status` = `open` (افتراضي) أو `resolved` أو `dismissed` → `{ alerts: [{ id, user_id, session_id, name, kind, from_at, to_at, status, resolution, employee_note, employee_note_at, detected_at, resolved_at }], timezone, server_time }` (الأحدث أول بحسب `from_at` ثم `id`، حد أقصى 200؛ `resolved_at` فاضي للتنبيه المفتوح؛ `kind` ممكن يكون `idle`: `from_at` = آخر نشاط، `to_at` = وقت رجوع النشاط أو نهاية الجلسة، و`null` إذا لسا جاري) · `400 INVALID_STATUS` |
 | POST | `/admin/alerts/:id/dismiss` | تجاهل تنبيه مفتوح → `{ ok: true }` · `404 ALERT_NOT_FOUND` |
+| GET | `/admin/early-leave?status=pending\|all&days=30` | طلبات الإنهاء المبكر (المعلّقة، أو كلها بآخر 1–90 يوم) مع اسم الموظف ومين ردّ → `{ requests: Request[], timezone, server_time }` · `400 INVALID_STATUS` · `400 INVALID_DAYS` |
+| POST | `/admin/early-leave/:id/approve` | موافقة: الجلسة بتنتهي **بلحظتها** (`closed_by = approved`، الملاحظة = السبب، الاستراحة المفتوحة بتتسكّر) → `{ ok, session_id, ended_at }` · `404 REQUEST_NOT_FOUND` · `409 REQUEST_EXPIRED` (الجلسة كانت انتهت) |
+| POST | `/admin/early-leave/:id/reject` | Body: `{ note? }` (حد أقصى 300) — رفض؛ الموظف بيضل داخل الدوام وفيه يبعت طلب جديد → `{ ok: true }` · `400 NOTE_TOO_LONG` · `404 REQUEST_NOT_FOUND` |
 | PUT | `/admin/settings` | Body: `{ timezone, locale ("ar" أو "en"؛ الغايب = بيضل متل ما هو، و`null` = `ar`), daily_target_hours, max_session_hours, work_start, work_end (HH:MM أو null، لازم بعد work_start), work_days (1–127), late_grace_minutes, note_on_stop, break_mode, break_start, break_end, break_paid, activity_monitoring (boolean), idle_minutes (1–240، افتراضي 30) }` — `break_mode` واحد من `off`/`fixed`/`flexible` (افتراضي `off`)؛ مع `fixed` لازم `break_start` و `break_end` (`HH:MM`، البداية قبل النهاية)؛ `break_paid` boolean. إذا الـ body فيه `breaks_enabled: true` بدون `break_mode` بينحسب `flexible` (توافق مع النسخة القديمة). الحقل الناقص من الـ body بيضل متل ما هو (`null` أو `""` = فاضي أو القيمة الافتراضية). قبل الحفظ بيسجّل النوافذ الثابتة اللي بلّشت تحت السياسة الحالية، وإذا تغيّر `break_mode`/`break_start`/`break_end`/`break_paid` بيصير `break_policy_since = now`. وتفعيل المراقبة بيسجّل `activity_monitoring_since = now` |
 
 كل دقيقة (وقبل `/admin/live` و`/admin/alerts` و`/me/alerts`) بيفحص السيرفر الجلسات المفتوحة ويفتح تنبيه `idle` إذا عدّى حد الخمول بلا نشاط (بدون الاستراحات، وبشرط وصل حدث للموقع بآخر 24 ساعة).
@@ -346,6 +349,7 @@ role === "admin"  أو  type === "agency"   →  manager
 | `EARLY_LEAVE_PENDING` | 409 | في طلب معلّق لنفس الجلسة | عندك طلب معلّق |
 | `REASON_TOO_LONG` | 400 | السبب أطول من 300 حرف | السبب طويل كتير |
 | `REQUEST_NOT_FOUND` | 404 | الطلب مو موجود أو مو معلّق أو مو إلك | الطلب ما عاد موجود |
+| `REQUEST_EXPIRED` | 409 | موافقة على طلب جلسته كانت انتهت | الطلب انتهى قبل الرد |
 | `INVALID_EARLY_LEAVE` | 400 | `early_leave_approval` مش boolean | إعداد غير صحيح |
 | `NOTE_REQUIRED` | 400 | المدير خلّى الملاحظة إلزامية | اكتب ملاحظة قبل إنهاء الدوام |
 | `NOTE_TOO_LONG` | 400 | أكتر من 500 حرف (ملاحظة الإنهاء) أو 300 (ملاحظة التنبيه) | الملاحظة طويلة جداً |

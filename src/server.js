@@ -1398,6 +1398,92 @@ app.post("/admin/alerts/:id/dismiss", authed, managerOnly, async (c) => {
   return c.json({ ok: true });
 });
 
+app.get("/admin/early-leave", authed, managerOnly, async (c) => {
+  const { loc } = c.get("claims");
+  await autoCloseStale(loc);
+  const status = c.req.query("status") ?? "pending";
+  if (status !== "pending" && status !== "all") throw new HttpError(400, "INVALID_STATUS");
+  const days = intParam(c, "days", 30);
+  if (days < 1 || days > 90) throw new HttpError(400, "INVALID_DAYS");
+  const pendingOnly = status === "pending" ? 1 : 0;
+  const rows = await q(
+    `${EARLY_LEAVE_SELECT}
+      WHERE r.location_id = :loc AND (:pendingOnly = 0 OR r.status = 'pending')
+        AND (:pendingOnly = 1 OR r.requested_at >= :from)
+      ORDER BY r.requested_at DESC, r.id DESC`,
+    { loc, pendingOnly, from: now() - days * 86400 }
+  );
+  const st = await getSettings(loc);
+  return c.json({ requests: rows.map(earlyLeaveRow), timezone: st?.timezone ?? "Asia/Riyadh", server_time: now() });
+});
+
+// Approval ends the session at this moment (spec 2026-10-07 §4): one transaction locks the
+// request and its session, ends both, then the same follow-ups as a normal stop run.
+app.post("/admin/early-leave/:id/approve", authed, managerOnly, async (c) => {
+  const { loc, uid: manager } = c.get("claims");
+  const conn = await pool.getConnection();
+  let ended = null;
+  let expired = false;
+  try {
+    await conn.beginTransaction();
+    const [[req]] = await conn.execute(
+      `SELECT id, session_id, reason FROM early_leave_requests
+        WHERE id = :id AND location_id = :loc AND status = 'pending' FOR UPDATE`,
+      { id: c.req.param("id"), loc }
+    );
+    if (!req) throw new HttpError(404, "REQUEST_NOT_FOUND");
+    const t = now();
+    const [[s]] = await conn.execute(
+      "SELECT id, started_at, ended_at FROM sessions WHERE id = :sid AND location_id = :loc FOR UPDATE",
+      { sid: req.session_id, loc }
+    );
+    if (!s || s.ended_at != null) {
+      await conn.execute(
+        "UPDATE early_leave_requests SET status = 'expired', decided_at = :t WHERE id = :id",
+        { t, id: req.id }
+      );
+      expired = true;
+    } else {
+      await conn.execute(
+        `UPDATE sessions SET ended_at = :t, duration_sec = :dur, closed_by = 'approved', note = :note
+          WHERE id = :sid`,
+        { t, dur: t - Number(s.started_at), note: req.reason, sid: s.id }
+      );
+      await conn.execute("UPDATE breaks SET ended_at = :t WHERE session_id = :sid AND ended_at IS NULL", { t, sid: s.id });
+      await conn.execute(
+        "UPDATE early_leave_requests SET status = 'approved', decided_by = :manager, decided_at = :t WHERE id = :id",
+        { manager, t, id: req.id }
+      );
+      ended = { session_id: s.id, ended_at: t };
+    }
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback().catch(() => {});
+    throw e;
+  } finally {
+    conn.release();
+  }
+  if (expired) throw new HttpError(409, "REQUEST_EXPIRED");
+  await closeIdleOnEndedSessions(loc).catch((e) => console.error("[idle-close]", e));
+  await summarizeClosedSessions(loc).catch((e) => console.error("[activity-summary]", e));
+  return c.json({ ok: true, ...ended });
+});
+
+app.post("/admin/early-leave/:id/reject", authed, managerOnly, async (c) => {
+  const { loc, uid: manager } = c.get("claims");
+  const b = (await c.req.json().catch(() => null)) ?? {};
+  const note = typeof b.note === "string" ? b.note.trim() : "";
+  if (note.length > EARLY_LEAVE_TEXT_MAX) throw new HttpError(400, "NOTE_TOO_LONG");
+  await expireEarlyLeave(loc); // a request whose session already ended is no longer pending
+  const r = await q(
+    `UPDATE early_leave_requests SET status = 'rejected', decided_by = :manager, decided_at = :t, manager_note = :note
+      WHERE id = :id AND location_id = :loc AND status = 'pending'`,
+    { manager, t: now(), note: note || null, id: c.req.param("id"), loc }
+  );
+  if (!r.affectedRows) throw new HttpError(404, "REQUEST_NOT_FOUND");
+  return c.json({ ok: true });
+});
+
 app.put("/admin/settings", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
   // Windows that already began under the CURRENT policy are recorded before it changes;

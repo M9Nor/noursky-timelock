@@ -1320,6 +1320,51 @@ if (elNowH === 23 && elNowM >= 57) {
   check("history days outside 1–90 → 400",
     (await call(ELE, "GET", "/me/early-leave?days=91")).body?.error === "INVALID_DAYS");
 
+  // Manager: reject, then approve (with an open break), histories.
+  const elR4 = await call(ELE, "POST", "/me/early-leave", { reason: "عندي ظرف" });
+  const elOther = await sso({ userId: `${ELLOC}-x-m1`, role: "admin", type: "account", activeLocation: `${ELLOC}-x`, userName: "مدير غريب", email: "elx@x.com" });
+  check("another location's manager cannot approve",
+    (await call(elOther.body?.token, "POST", `/admin/early-leave/${elR4.body?.id}/approve`)).body?.error === "REQUEST_NOT_FOUND");
+  check("an employee cannot approve", (await call(ELE, "POST", `/admin/early-leave/${elR4.body?.id}/approve`)).status === 403);
+  const elPend = (await call(ELM, "GET", "/admin/early-leave?status=pending")).body?.requests ?? [];
+  check("the manager sees the pending request with the name",
+    elPend.length === 1 && elPend[0].id === elR4.body?.id && elPend[0].name === "موظف الإنهاء", `(${JSON.stringify(elPend)})`);
+  check("a manager note over 300 characters → 400",
+    (await call(ELM, "POST", `/admin/early-leave/${elR4.body?.id}/reject`, { note: "x".repeat(301) })).body?.error === "NOTE_TOO_LONG");
+  await sleep(1100); // the rejection must be decided in a later second than the earlier cancel
+  check("the manager rejects with a note",
+    (await call(ELM, "POST", `/admin/early-leave/${elR4.body?.id}/reject`, { note: "خلّص الطلبية أول" })).status === 200);
+  const elSt3 = (await call(ELE, "GET", "/me/status")).body;
+  check("after a rejection the session stays open and the employee sees why",
+    elSt3?.open_session != null && elSt3?.early_leave?.pending === null && elSt3?.early_leave?.last?.status === "rejected"
+      && elSt3?.early_leave?.last?.manager_note === "خلّص الطلبية أول" && elSt3?.early_leave?.last?.decided_by_name === "مدير الإنهاء",
+    `(${JSON.stringify(elSt3?.early_leave)})`);
+  await sleep(1100); // the approval below must be decided in a later second than the rejection
+  const elR5 = await call(ELE, "POST", "/me/early-leave", { reason: "موعد مستعجل" });
+  check("after a rejection a new request can be sent", elR5.status === 201);
+  await call(ELE, "POST", "/session/break/start");
+  const elApprove = await call(ELM, "POST", `/admin/early-leave/${elR5.body?.id}/approve`);
+  check("approval ends the session now", elApprove.status === 200 && Math.abs(elApprove.body?.ended_at - Math.floor(Date.now() / 1000)) <= 5,
+    `(${elApprove.status} ${JSON.stringify(elApprove.body)})`);
+  check("approving again → 404",
+    (await call(ELM, "POST", `/admin/early-leave/${elR5.body?.id}/approve`)).body?.error === "REQUEST_NOT_FOUND");
+  const elSt4 = (await call(ELE, "GET", "/me/status")).body;
+  check("the employee is out and sees the approval",
+    elSt4?.open_session === null && elSt4?.open_break === null && elSt4?.early_leave?.last?.status === "approved", `(${JSON.stringify(elSt4?.early_leave)})`);
+  const elT = Math.floor(Date.now() / 1000);
+  const elSess = ((await call(ELM, "GET", `/admin/sessions?from=${elT - 3600}&to=${elT + 60}&user_id=${ELLOC}-u1`)).body?.sessions ?? [])
+    .find((x) => x.id === elApprove.body?.session_id);
+  check("the approved session says so and keeps the reason as its note",
+    elSess?.closed_by === "approved" && elSess?.note === "موعد مستعجل" && elSess?.ended_at === elApprove.body?.ended_at, `(${JSON.stringify(elSess)})`);
+  const elAll = (await call(ELM, "GET", "/admin/early-leave?status=all&days=30")).body?.requests ?? [];
+  check("the manager's history keeps every request, newest first",
+    elAll.map((r) => r.status).sort().join(",") === "approved,cancelled,rejected"
+      && elAll.every((r, i) => i === 0 || elAll[i - 1].requested_at >= r.requested_at),
+    `(${elAll.map((r) => r.status).join(",")})`);
+  check("an unknown status filter → 400",
+    (await call(ELM, "GET", "/admin/early-leave?status=open")).body?.error === "INVALID_STATUS");
+  await call(ELE, "POST", "/session/start"); // the expiry part below needs an open session
+
   // Expiry at work end and on auto-close (local DB only). The pause keeps decision times in
   // different seconds, so "newest decided" is unambiguous.
   await sleep(1100);
