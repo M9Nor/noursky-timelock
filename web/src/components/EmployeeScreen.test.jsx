@@ -439,4 +439,44 @@ describe("EmployeeScreen", () => {
     expect(await screen.findByRole("button", { name: /Clock in/ })).toBeInTheDocument();
     expect(screen.getByText("My hours this week")).toBeInTheDocument();
   });
+
+  const earlyStatus = (early, open = true) => {
+    const t = nowSec();
+    return { open_session: open ? { id: "s1", started_at: t - 3600, break_sec: 0 } : null, worked_sec: 3600, server_time: t,
+      early_leave: { required: true, work_end_at: t + 7200, timezone: "UTC", pending: null, last: null, ...early } };
+  };
+
+  it("asks for the manager's approval instead of clocking out before work end", async () => {
+    const api = makeApi(earlyStatus({}));
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    fireEvent.click(await screen.findByRole("button", { name: /إنهاء الدوام/ }));
+    fireEvent.change(screen.getByLabelText("السبب"), { target: { value: "موعد" } });
+    fireEvent.click(screen.getByRole("button", { name: "إرسال الطلب" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/me/early-leave", { reason: "موعد" }));
+    expect(api.post).not.toHaveBeenCalledWith("/session/stop", expect.anything());
+  });
+
+  it("shows a pending request, lets the employee cancel it, and disables ending", async () => {
+    const api = makeApi(earlyStatus({ pending: { id: "r1", reason: "موعد", status: "pending" } }));
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    expect(await screen.findByText(/السبب: موعد/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /إنهاء الدوام/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "إلغاء الطلب" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/me/early-leave/r1/cancel"));
+  });
+
+  it("shows a rejection with the manager's note for the open session", async () => {
+    const t = nowSec();
+    const api = makeApi(earlyStatus({ last: { id: "r1", session_id: "s1", status: "rejected", decided_at: t, manager_note: "بعد الطلبية" } }));
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    expect(await screen.findByText(/رفض المدير طلبك/)).toBeInTheDocument();
+    expect(screen.getByText(/بعد الطلبية/)).toBeInTheDocument();
+  });
+
+  it("shows the approval once the shift ended", async () => {
+    const t = nowSec();
+    const api = makeApi(earlyStatus({ required: false, last: { id: "r1", session_id: "s1", status: "approved", decided_at: t } }, false));
+    wrap(<EmployeeScreen api={api} user={{ name: "سارة" }} />);
+    expect(await screen.findByText(/وافق المدير، انتهى دوامك/)).toBeInTheDocument();
+  });
 });

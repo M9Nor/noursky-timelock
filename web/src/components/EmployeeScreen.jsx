@@ -4,6 +4,8 @@ import Icon from "./Icon.jsx";
 import { useToast } from "./ToastContext.jsx";
 import { formatClock, formatHours, formatIdle, formatTime, serverOffset, nowWithOffset, liveTotals } from "../time.js";
 import MyHistory from "./MyHistory.jsx";
+import MyEarlyLeave from "./MyEarlyLeave.jsx";
+import EarlyLeaveDialog from "./EarlyLeaveDialog.jsx";
 import StopNoteDialog from "./StopNoteDialog.jsx";
 import { useAlertTitle } from "../alertTitle.js";
 import { useI18n } from "../i18n.jsx";
@@ -25,6 +27,8 @@ export default function EmployeeScreen({ api, user }) {
   const [targetSec, setTargetSec] = useState(8 * 3600);
   const [policy, setPolicy] = useState({ break_mode: "off", break_start: null, break_end: null, break_paid: false, note_on_stop: "off" });
   const [askNote, setAskNote] = useState(false);
+  const [askEarly, setAskEarly] = useState(false);
+  const [earlyError, setEarlyError] = useState("");
   const [alerts, setAlerts] = useState({ list: [], timezone: null, serverTime: null });
   const [alertNote, setAlertNote] = useState("");
   const [alertNoteError, setAlertNoteError] = useState("");
@@ -123,6 +127,12 @@ export default function EmployeeScreen({ api, user }) {
         await refresh().catch(() => {});
         return false;
       }
+      if (e.code === "EARLY_LEAVE_NEEDS_APPROVAL") {
+        // Our copy of the rule was stale (the setting was just turned on): ask instead.
+        await reloadAll().catch(() => {});
+        setAskEarly(true);
+        return false;
+      }
       const mapped = SPECIFIC_ERRORS.has(e.code) ? `err.${e.code}` : null;
       if (mapped) {
         if (dialog) setNoteError(mapped); else setError(mapped);
@@ -139,6 +149,7 @@ export default function EmployeeScreen({ api, user }) {
 
   function toggle() {
     if (!status?.open_session) return run(() => api.post("/session/start"), t("employee.toastStarted"));
+    if (status?.early_leave?.required) { setEarlyError(""); setAskEarly(true); return undefined; }
     if (policy.note_on_stop !== "off") { setNoteError(""); setAskNote(true); return undefined; }
     return run(() => api.post("/session/stop"), t("employee.toastStopped"));
   }
@@ -146,6 +157,27 @@ export default function EmployeeScreen({ api, user }) {
   async function stopWithNote(note) {
     const ok = await run(() => api.post("/session/stop", note ? { note } : {}), t("employee.toastStopped"), { dialog: true });
     if (ok) setAskNote(false);
+  }
+
+  async function sendEarlyLeave(reason) {
+    setLoading(true);
+    setEarlyError("");
+    try {
+      await api.post("/me/early-leave", { reason });
+      setAskEarly(false);
+      toast(t("earlyLeave.sent"));
+      await reloadAll().catch(() => {});
+    } catch (e) {
+      const known = ["REASON_REQUIRED", "REASON_TOO_LONG", "EARLY_LEAVE_PENDING", "EARLY_LEAVE_NOT_REQUIRED"];
+      setEarlyError(t(known.includes(e.code) ? `err.${e.code}` : GENERIC_ERROR));
+      if (e.code === "EARLY_LEAVE_PENDING" || e.code === "EARLY_LEAVE_NOT_REQUIRED") await reloadAll().catch(() => {});
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function withdrawEarlyLeave(id) {
+    await run(() => api.post(`/me/early-leave/${id}/cancel`), t("earlyLeave.withdrawn"));
   }
 
   async function sendAlertNote(id) {
@@ -174,6 +206,11 @@ export default function EmployeeScreen({ api, user }) {
   const open = status?.open_session;
   const nci = !open ? alerts.list.find((a) => a.kind === "working_not_clocked_in") : null;
   const idle = open ? alerts.list.find((a) => a.kind === "idle" && a.to_at == null) : null;
+  const early = status?.early_leave ?? null;
+  const earlyPending = open ? early?.pending ?? null : null;
+  const earlyRejected = open && early?.last?.status === "rejected" && early.last.session_id === open.id ? early.last : null;
+  const earlyApproved = !open && early?.last?.status === "approved" ? early.last : null;
+  const earlyTz = early?.timezone ?? null;
   useAlertTitle(Boolean(nci || idle));
 
   if (!status && !error) return <div className="panel muted">{t("employee.loading")}</div>;
@@ -223,7 +260,7 @@ export default function EmployeeScreen({ api, user }) {
           {status?.activity_monitoring && <p className="hint">{t("employee.monitoring")}</p>}
         </div>
         <div className="actions">
-          <Button onClick={toggle} loading={loading} variant={open ? "danger" : "primary"} size="lg">
+          <Button onClick={toggle} loading={loading} variant={open ? "danger" : "primary"} size="lg" disabled={Boolean(open && earlyPending)}>
             <Icon name={open ? "stop" : "play"} />{open ? t("employee.clockOut") : t("employee.clockIn")}
           </Button>
           {showBreak && (
@@ -254,13 +291,38 @@ export default function EmployeeScreen({ api, user }) {
         </section>
       )}
 
+      {earlyPending && (
+        <section className="panel notice" role="status">
+          <p>{t("earlyLeave.pending", { reason: earlyPending.reason })}</p>
+          <Button variant="ghost" size="sm" onClick={() => withdrawEarlyLeave(earlyPending.id)}>{t("earlyLeave.withdraw")}</Button>
+        </section>
+      )}
+      {earlyRejected && !earlyPending && (
+        <section className="panel notice" role="status">
+          <p>{t("earlyLeave.rejected", { time: formatTime(earlyRejected.decided_at, earlyTz) })}</p>
+          {earlyRejected.manager_note && <p>{t("earlyLeave.rejectedNote", { note: earlyRejected.manager_note })}</p>}
+          <p className="hint">{t("earlyLeave.again")}</p>
+        </section>
+      )}
+      {earlyApproved && (
+        <section className="panel notice" role="status">
+          <p>{t("earlyLeave.approved", { time: formatTime(earlyApproved.decided_at, earlyTz) })}</p>
+        </section>
+      )}
+
       <section className="panel">
         <div className="panel-h"><h2>{t("employee.weekTitle")}</h2></div>
         <p className="hero-meta"><span>{t("employee.weekTotal")}<strong className="ltr">{formatHours(weekSec)}</strong></span></p>
       </section>
 
       <MyHistory api={api} reloadKey={historyKey} />
+      <MyEarlyLeave api={api} reloadKey={historyKey} />
 
+      {askEarly && (
+        <EarlyLeaveDialog workEnd={early?.work_end_at ? formatTime(early.work_end_at, earlyTz) : null}
+          loading={loading} error={earlyError}
+          onSend={sendEarlyLeave} onCancel={() => { setAskEarly(false); setEarlyError(""); }} />
+      )}
       {askNote && (
         <StopNoteDialog required={policy.note_on_stop === "required"} loading={loading} error={noteError ? t(noteError) : ""}
           onConfirm={stopWithNote} onCancel={() => { setAskNote(false); setNoteError(""); }} />
