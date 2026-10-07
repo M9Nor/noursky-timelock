@@ -1593,7 +1593,7 @@ app.get("/oauth/callback", async (c) => {
       redirectUri: env.GHL_REDIRECT_URI || DEFAULT_REDIRECT_URI,
     });
   } catch (e) {
-    console.error("[oauth]", e.message, e.status ?? "");
+    console.error("[oauth]", e.message, e.status ?? "", e.detail ?? "");
     if (e.message === "OAUTH_UNREACHABLE") {
       return c.html(installPage(c, "failed", "unreachable"), 504);
     }

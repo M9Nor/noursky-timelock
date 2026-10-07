@@ -31,6 +31,7 @@ export async function exchangeCode({ code, clientId, clientSecret, redirectUri, 
   if (!res.ok || !data?.access_token || !data?.locationId) {
     const err = new Error("OAUTH_EXCHANGE_FAILED");
     err.status = res.status;
+    err.detail = responseShape(data);
     throw err;
   }
   return {
@@ -41,4 +42,18 @@ export async function exchangeCode({ code, clientId, clientSecret, redirectUri, 
     locationId: data.locationId,
     companyId: data.companyId ?? null,
   };
+}
+
+/**
+ * What a refused exchange looked like, for the log: the token type, the bulk flag, the
+ * error code and the field names — never a value of a token or secret.
+ */
+function responseShape(data) {
+  if (!data || typeof data !== "object") return "no JSON body";
+  const parts = [];
+  if (data.userType != null) parts.push(`userType=${String(data.userType).slice(0, 20)}`);
+  if (data.isBulkInstallation != null) parts.push(`bulk=${Boolean(data.isBulkInstallation)}`);
+  if (typeof data.error === "string") parts.push(`error=${data.error.slice(0, 40)}`);
+  parts.push(`keys=${Object.keys(data).sort().join(",").slice(0, 300)}`);
+  return parts.join(" ");
 }
