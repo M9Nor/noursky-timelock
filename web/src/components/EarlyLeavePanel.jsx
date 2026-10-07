@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import Button from "./Button.jsx";
+import Icon from "./Icon.jsx";
 import { useToast } from "./ToastContext.jsx";
 import { formatStamp, formatTime } from "../time.js";
 import { useAlertTitle } from "../alertTitle.js";
 import { useI18n } from "../i18n.jsx";
-import { usePolling } from "../usePolling.js";
+import { usePolling, REFRESH_EVENT } from "../usePolling.js";
 
 // Early-leave requests for the manager (spec 2026-10-07 §5): pending ones to approve or decline,
 // and the history of the last 30 days. Hidden while there is neither.
@@ -40,7 +41,8 @@ export default function EarlyLeavePanel({ api }) {
       // Already answered, cancelled or expired elsewhere: the reload below shows the truth.
     } finally {
       setBusy(false);
-      await load().catch(() => {});
+      // Reloads this panel too; an approval also changes the live floor and the report.
+      window.dispatchEvent(new Event(REFRESH_EVENT));
     }
   }
 
@@ -53,10 +55,19 @@ export default function EarlyLeavePanel({ api }) {
       <div className="panel-h">
         <h2>{t("earlyLeave.panelTitle")}</h2>
         {data.pending.length > 0 && <b className="count">{data.pending.length}</b>}
-      </div>
-      <div className="seg" role="tablist">
-        <button type="button" role="tab" aria-selected={tab === "pending"} onClick={() => setTab("pending")}>{t("earlyLeave.tabPending")}</button>
-        <button type="button" role="tab" aria-selected={tab === "history"} onClick={() => setTab("history")}>{t("earlyLeave.tabHistory")}</button>
+        <div className="toolbar">
+          <div className="filters" role="group" aria-label={t("earlyLeave.panelTitle")}>
+            <button type="button" aria-pressed={tab === "pending"} onClick={() => setTab("pending")}>{t("earlyLeave.tabPending")}</button>
+            <button type="button" aria-pressed={tab === "history"} onClick={() => setTab("history")}>{t("earlyLeave.tabHistory")}</button>
+          </div>
+          {tab === "history" && (
+            <div className="search">
+              <label htmlFor="early-q" className="sr">{t("earlyLeave.search")}</label>
+              <input id="early-q" type="search" placeholder={t("earlyLeave.search")} value={query} onChange={(e) => setQuery(e.target.value)} />
+              <Icon name="search" />
+            </div>
+          )}
+        </div>
       </div>
 
       {tab === "pending" && (data.pending.length ? data.pending.map((r) => (
@@ -84,8 +95,6 @@ export default function EarlyLeavePanel({ api }) {
 
       {tab === "history" && (
         <>
-          <input type="search" placeholder={t("earlyLeave.search")} aria-label={t("earlyLeave.search")}
-            value={query} onChange={(e) => setQuery(e.target.value)} />
           {history.length ? (
             <div className="table-wrap">
               <table>

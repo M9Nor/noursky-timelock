@@ -34,6 +34,18 @@ describe("EarlyLeavePanel", () => {
     await waitFor(() => expect(api.post).toHaveBeenCalledWith("/admin/early-leave/r1/approve"));
   });
 
+  it("asks the other panels to refresh after a decision", async () => {
+    const seen = vi.fn();
+    window.addEventListener("timeclock:refresh", seen);
+    try {
+      wrap(<EarlyLeavePanel api={makeApi()} />);
+      fireEvent.click(await screen.findByRole("button", { name: "موافقة" }));
+      await waitFor(() => expect(seen).toHaveBeenCalled());
+    } finally {
+      window.removeEventListener("timeclock:refresh", seen);
+    }
+  });
+
   it("rejects with an optional note", async () => {
     const api = makeApi();
     wrap(<EarlyLeavePanel api={api} />);
@@ -49,7 +61,7 @@ describe("EarlyLeavePanel", () => {
       { ...pendingReq, id: "r2", user_id: "u2", name: "أحمد", reason: "ظرف", status: "rejected", decided_at: at + 60, decided_by_name: "المدير", manager_note: "لا" },
     ] });
     wrap(<EarlyLeavePanel api={api} />);
-    fireEvent.click(await screen.findByRole("tab", { name: "السجل" }));
+    fireEvent.click(await screen.findByRole("button", { name: "السجل" }));
     expect(await screen.findByText("أحمد")).toBeInTheDocument();
     expect(screen.getByText("مرفوض")).toBeInTheDocument();
     expect(screen.getByText("لا")).toBeInTheDocument();
