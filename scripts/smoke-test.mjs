@@ -101,7 +101,7 @@ async function withLocalDb(fn) {
 /** Best-effort removal of one fixture location's rows, so test data does not accumulate. */
 async function cleanupLocation(loc) {
   const { skipped } = await withLocalDb(async (conn) => {
-    for (const table of ["activity_events", "activity_alerts", "ghl_installs", "breaks", "edits_log", "sessions", "employees", "settings"]) {
+    for (const table of ["early_leave_requests", "activity_events", "activity_alerts", "ghl_installs", "breaks", "edits_log", "sessions", "employees", "settings"]) {
       await conn.execute(`DELETE FROM ${table} WHERE location_id = :loc`, { loc });
     }
   });
@@ -1271,6 +1271,134 @@ if (dev.status === 404) {
   const meDev = await call(devBody.token, "GET", "/me/status");
   check("dev-login token works on protected route", meDev.status === 200);
 }
+
+// --- Early-leave approval (spec 2026-10-07). Own location; UTC with work hours 00:00–23:59.
+const ELLOC = `${LOC}-el`;
+const elMgr = await sso({ userId: `${ELLOC}-m1`, role: "admin", type: "account", activeLocation: ELLOC, userName: "مدير الإنهاء", email: "elm@x.com" });
+const elEmp = await sso({ userId: `${ELLOC}-u1`, role: "user", type: "account", activeLocation: ELLOC, userName: "موظف الإنهاء", email: "ele@x.com" });
+const ELM = elMgr.body?.token, ELE = elEmp.body?.token;
+const elNowH = new Date().getUTCHours(), elNowM = new Date().getUTCMinutes();
+if (elNowH === 23 && elNowM >= 57) {
+  console.log("  SKIP  early-leave checks (too close to 23:59 UTC)");
+} else {
+  check("the early-leave setting is off by default",
+    (await call(ELM, "GET", "/admin/settings")).body?.early_leave_approval === false);
+  const elSet = await call(ELM, "PUT", "/admin/settings",
+    { timezone: "UTC", work_start: "00:00", work_end: "23:59", work_days: 127, early_leave_approval: true, break_mode: "flexible" });
+  check("the early-leave setting is saved", elSet.body?.early_leave_approval === true, `(${elSet.status} ${JSON.stringify(elSet.body?.error)})`);
+  check("a settings save without the field keeps it",
+    (await call(ELM, "PUT", "/admin/settings", { timezone: "UTC" })).body?.early_leave_approval === true);
+  check("a non-boolean early-leave setting → 400",
+    (await call(ELM, "PUT", "/admin/settings", { early_leave_approval: "yes" })).body?.error === "INVALID_EARLY_LEAVE");
+
+  check("a request without a session → 409",
+    (await call(ELE, "POST", "/me/early-leave", { reason: "موعد" })).body?.error === "NO_OPEN_SESSION");
+  await call(ELE, "POST", "/session/start");
+  const elSt0 = (await call(ELE, "GET", "/me/status")).body?.early_leave;
+  check("status says approval is required before work end",
+    elSt0?.required === true && elSt0?.pending === null && elSt0?.timezone === "UTC" && Number.isInteger(elSt0?.work_end_at), `(${JSON.stringify(elSt0)})`);
+  check("clocking out before work end needs approval",
+    (await call(ELE, "POST", "/session/stop")).body?.error === "EARLY_LEAVE_NEEDS_APPROVAL");
+  check("a request without a reason → 400",
+    (await call(ELE, "POST", "/me/early-leave", { reason: "   " })).body?.error === "REASON_REQUIRED");
+  check("a reason over 300 characters → 400",
+    (await call(ELE, "POST", "/me/early-leave", { reason: "x".repeat(301) })).body?.error === "REASON_TOO_LONG");
+  const elR1 = await call(ELE, "POST", "/me/early-leave", { reason: "موعد عند الطبيب" });
+  check("a request is created pending", elR1.status === 201 && elR1.body?.status === "pending" && elR1.body?.reason === "موعد عند الطبيب",
+    `(${elR1.status} ${JSON.stringify(elR1.body)})`);
+  check("only one pending request at a time",
+    (await call(ELE, "POST", "/me/early-leave", { reason: "تاني" })).body?.error === "EARLY_LEAVE_PENDING");
+  check("status carries the pending request",
+    (await call(ELE, "GET", "/me/status")).body?.early_leave?.pending?.id === elR1.body?.id);
+  check("the employee cancels a pending request",
+    (await call(ELE, "POST", `/me/early-leave/${elR1.body?.id}/cancel`)).status === 200);
+  check("cancelling again → 404",
+    (await call(ELE, "POST", `/me/early-leave/${elR1.body?.id}/cancel`)).body?.error === "REQUEST_NOT_FOUND");
+  const elMine = (await call(ELE, "GET", "/me/early-leave?days=30")).body?.requests ?? [];
+  check("the employee's history keeps the cancelled request",
+    elMine.length === 1 && elMine[0].status === "cancelled" && elMine[0].decided_at != null, `(${JSON.stringify(elMine)})`);
+  check("history days outside 1–90 → 400",
+    (await call(ELE, "GET", "/me/early-leave?days=91")).body?.error === "INVALID_DAYS");
+
+  // Manager: reject, then approve (with an open break), histories.
+  const elR4 = await call(ELE, "POST", "/me/early-leave", { reason: "عندي ظرف" });
+  const elOther = await sso({ userId: `${ELLOC}-x-m1`, role: "admin", type: "account", activeLocation: `${ELLOC}-x`, userName: "مدير غريب", email: "elx@x.com" });
+  check("another location's manager cannot approve",
+    (await call(elOther.body?.token, "POST", `/admin/early-leave/${elR4.body?.id}/approve`)).body?.error === "REQUEST_NOT_FOUND");
+  check("an employee cannot approve", (await call(ELE, "POST", `/admin/early-leave/${elR4.body?.id}/approve`)).status === 403);
+  const elPend = (await call(ELM, "GET", "/admin/early-leave?status=pending")).body?.requests ?? [];
+  check("the manager sees the pending request with the name",
+    elPend.length === 1 && elPend[0].id === elR4.body?.id && elPend[0].name === "موظف الإنهاء", `(${JSON.stringify(elPend)})`);
+  check("a manager note over 300 characters → 400",
+    (await call(ELM, "POST", `/admin/early-leave/${elR4.body?.id}/reject`, { note: "x".repeat(301) })).body?.error === "NOTE_TOO_LONG");
+  await sleep(1100); // the rejection must be decided in a later second than the earlier cancel
+  check("the manager rejects with a note",
+    (await call(ELM, "POST", `/admin/early-leave/${elR4.body?.id}/reject`, { note: "خلّص الطلبية أول" })).status === 200);
+  const elSt3 = (await call(ELE, "GET", "/me/status")).body;
+  check("after a rejection the session stays open and the employee sees why",
+    elSt3?.open_session != null && elSt3?.early_leave?.pending === null && elSt3?.early_leave?.last?.status === "rejected"
+      && elSt3?.early_leave?.last?.manager_note === "خلّص الطلبية أول" && elSt3?.early_leave?.last?.decided_by_name === "مدير الإنهاء",
+    `(${JSON.stringify(elSt3?.early_leave)})`);
+  await sleep(1100); // the approval below must be decided in a later second than the rejection
+  const elR5 = await call(ELE, "POST", "/me/early-leave", { reason: "موعد مستعجل" });
+  check("after a rejection a new request can be sent", elR5.status === 201);
+  await call(ELE, "POST", "/session/break/start");
+  const elApprove = await call(ELM, "POST", `/admin/early-leave/${elR5.body?.id}/approve`);
+  check("approval ends the session now", elApprove.status === 200 && Math.abs(elApprove.body?.ended_at - Math.floor(Date.now() / 1000)) <= 5,
+    `(${elApprove.status} ${JSON.stringify(elApprove.body)})`);
+  check("approving again → 404",
+    (await call(ELM, "POST", `/admin/early-leave/${elR5.body?.id}/approve`)).body?.error === "REQUEST_NOT_FOUND");
+  const elSt4 = (await call(ELE, "GET", "/me/status")).body;
+  check("the employee is out and sees the approval",
+    elSt4?.open_session === null && elSt4?.open_break === null && elSt4?.early_leave?.last?.status === "approved", `(${JSON.stringify(elSt4?.early_leave)})`);
+  const elT = Math.floor(Date.now() / 1000);
+  const elSess = ((await call(ELM, "GET", `/admin/sessions?from=${elT - 3600}&to=${elT + 60}&user_id=${ELLOC}-u1`)).body?.sessions ?? [])
+    .find((x) => x.id === elApprove.body?.session_id);
+  check("the approved session says so and keeps the reason as its note",
+    elSess?.closed_by === "approved" && elSess?.note === "موعد مستعجل" && elSess?.ended_at === elApprove.body?.ended_at, `(${JSON.stringify(elSess)})`);
+  const elAll = (await call(ELM, "GET", "/admin/early-leave?status=all&days=30")).body?.requests ?? [];
+  check("the manager's history keeps every request, newest first",
+    elAll.map((r) => r.status).sort().join(",") === "approved,cancelled,rejected"
+      && elAll.every((r, i) => i === 0 || elAll[i - 1].requested_at >= r.requested_at),
+    `(${elAll.map((r) => r.status).join(",")})`);
+  check("an unknown status filter → 400",
+    (await call(ELM, "GET", "/admin/early-leave?status=open")).body?.error === "INVALID_STATUS");
+  await call(ELE, "POST", "/session/start"); // the expiry part below needs an open session
+
+  // Expiry at work end and on auto-close (local DB only). The pause keeps decision times in
+  // different seconds, so "newest decided" is unambiguous.
+  await sleep(1100);
+  const elR2 = await call(ELE, "POST", "/me/early-leave", { reason: "سبب تاني" });
+  const elBack = await localRows("UPDATE early_leave_requests SET work_end_at = :t WHERE id = :id",
+    { t: Math.floor(Date.now() / 1000) - 1, id: elR2.body?.id });
+  if (elBack === null) {
+    console.log("  SKIP  early-leave expiry checks (no local DB)");
+  } else {
+    const elSt1 = (await call(ELE, "GET", "/me/status")).body?.early_leave;
+    check("a pending request expires at work end",
+      elSt1?.pending === null && elSt1?.last?.id === elR2.body?.id && elSt1?.last?.status === "expired", `(${JSON.stringify(elSt1)})`);
+    const elR3 = await call(ELE, "POST", "/me/early-leave", { reason: "سبب تالت" });
+    await localRows("UPDATE sessions SET started_at = :s WHERE location_id = :loc AND ended_at IS NULL",
+      { s: Math.floor(Date.now() / 1000) - 13 * 3600, loc: ELLOC });
+    const elSt2 = await call(ELE, "GET", "/me/status");
+    const elR3Row = ((await call(ELE, "GET", "/me/early-leave")).body?.requests ?? []).find((r) => r.id === elR3.body?.id);
+    check("a pending request expires when the session auto-closes",
+      elSt2.body?.open_session === null && elR3Row?.status === "expired", `(${JSON.stringify(elR3Row)})`);
+  }
+
+  // After work end: no approval needed (work hours 00:00–00:01).
+  if (elNowH === 0 && elNowM < 2) {
+    console.log("  SKIP  after-work-end checks (too close to 00:01 UTC)");
+  } else {
+    await call(ELM, "PUT", "/admin/settings", { work_end: "00:01" });
+    await call(ELE, "POST", "/session/start");
+    check("after work end a request is not needed",
+      (await call(ELE, "POST", "/me/early-leave", { reason: "x" })).body?.error === "EARLY_LEAVE_NOT_REQUIRED");
+    check("after work end the employee clocks out alone", (await call(ELE, "POST", "/session/stop")).status === 200);
+    await call(ELM, "PUT", "/admin/settings", { work_end: "23:59" });
+  }
+}
+await cleanupLocation(ELLOC);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

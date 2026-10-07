@@ -12,7 +12,7 @@ import { createHash, createDecipheriv, createHmac, timingSafeEqual, randomUUID }
 import { localZone, localDate, wallToUtc, fixedWindows, localDayBounds } from "./tz.js";
 import { bodyLimit } from "hono/body-limit";
 import { verifyGhlSignature, parseWebhook, testKeyAllowed, isForOurApp, activityDedupeKey } from "./ghlWebhook.js";
-import { isWithinWorkHours, isFreshEvent, idleSeconds, sessionSummary, idleAlertAt, isLateActivity } from "./activity.js";
+import { isWithinWorkHours, isFreshEvent, idleSeconds, sessionSummary, idleAlertAt, isLateActivity, workEndAt, earlyLeaveRequired } from "./activity.js";
 import { exchangeCode } from "./ghlOAuth.js";
 import { encryptToken } from "./tokenCrypto.js";
 
@@ -158,6 +158,7 @@ async function getSettings(loc) {
       breaks_enabled: Boolean(st.breaks_enabled),
       break_paid: Boolean(st.break_paid),
       activity_monitoring: Boolean(st.activity_monitoring),
+      early_leave_approval: Boolean(st.early_leave_approval),
     }
     : null;
 }
@@ -287,6 +288,7 @@ async function autoCloseStale(loc = null) {
   );
   await closeIdleOnEndedSessions(loc).catch((e) => console.error("[idle-close]", e));
   await summarizeClosedSessions(loc).catch((e) => console.error("[activity-summary]", e));
+  await expireEarlyLeave(loc).catch((e) => console.error("[early-leave-expire]", e));
 }
 
 /** Break intervals of one session as [start, end|null], plus its fixed windows (paid ones too). */
@@ -533,6 +535,38 @@ async function closeIdleOnEndedSessions(loc = null) {
   );
 }
 
+/* ---------- Early leave (spec 2026-10-07) ---------- */
+const EARLY_LEAVE_TEXT_MAX = 300;
+const EARLY_LEAVE_SELECT = `SELECT r.id, r.user_id, r.session_id, r.reason, r.requested_at, r.work_end_at, r.status,
+       r.decided_by, r.decided_at, r.manager_note, e.name, d.name AS decided_by_name
+  FROM early_leave_requests r
+  LEFT JOIN employees e ON e.user_id = r.user_id AND e.location_id = r.location_id
+  LEFT JOIN employees d ON d.user_id = r.decided_by AND d.location_id = r.location_id`;
+
+function earlyLeaveRow(r) {
+  return {
+    ...r,
+    requested_at: Number(r.requested_at),
+    work_end_at: Number(r.work_end_at),
+    decided_at: r.decided_at == null ? null : Number(r.decided_at),
+  };
+}
+
+/**
+ * A pending request closes as `expired` once today's work end passed or its session ended
+ * another way (stop after work end, auto-close, a manager edit). Runs inside autoCloseStale —
+ * so before every read — and on the 60 s timer.
+ */
+async function expireEarlyLeave(loc = null) {
+  await q(
+    `UPDATE early_leave_requests r LEFT JOIN sessions s ON s.id = r.session_id
+        SET r.status = 'expired', r.decided_at = :t
+      WHERE r.status = 'pending' AND (r.work_end_at <= :t OR s.id IS NULL OR s.ended_at IS NOT NULL)
+        AND (:loc IS NULL OR r.location_id = :loc)`,
+    { t: now(), loc }
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* App                                                                 */
 /* ------------------------------------------------------------------ */
@@ -675,6 +709,15 @@ app.get("/me/status", authed, async (c) => {
     );
     if (rec) fixedBreak = { starts_at: Number(rec.started_at), ends_at: Number(rec.ended_at), paid: false };
   }
+  const [pendingReq] = open.length
+    ? await q(`${EARLY_LEAVE_SELECT} WHERE r.session_id = :sid AND r.status = 'pending'`, { sid: open[0].id })
+    : [];
+  const [lastReq] = await q(
+    `${EARLY_LEAVE_SELECT}
+      WHERE r.location_id = :loc AND r.user_id = :uid AND r.status <> 'pending' AND r.decided_at >= :dayStart
+      ORDER BY r.decided_at DESC, r.requested_at DESC LIMIT 1`,
+    { loc, uid, dayStart }
+  );
   return c.json({
     open_session: open[0]
       ? { id: open[0].id, started_at: Number(open[0].started_at), break_sec: Number(open[0].break_sec) }
@@ -685,6 +728,13 @@ app.get("/me/status", authed, async (c) => {
     // Lets the screen refresh at local midnight, when "today" starts over.
     day_ends_at: dayEnd,
     activity_monitoring: Boolean(st?.activity_monitoring),
+    early_leave: {
+      required: earlyLeaveRequired(st, t),
+      work_end_at: workEndAt(st, t),
+      timezone: st?.timezone ?? "Asia/Riyadh",
+      pending: pendingReq ? earlyLeaveRow(pendingReq) : null,
+      last: lastReq ? earlyLeaveRow(lastReq) : null,
+    },
     server_time: t,
   });
 });
@@ -762,6 +812,62 @@ app.post("/me/alerts/:id/note", authed, async (c) => {
   );
   if (!r.affectedRows) throw new HttpError(404, "ALERT_NOT_FOUND");
   return c.json({ ok: true });
+});
+
+app.post("/me/early-leave", authed, async (c) => {
+  const { uid, loc } = c.get("claims");
+  await autoCloseStale(loc);
+  const b = (await c.req.json().catch(() => null)) ?? {};
+  const reason = typeof b.reason === "string" ? b.reason.trim() : "";
+  const st = await getSettings(loc);
+  const t = now();
+  const [s] = await q(
+    "SELECT id FROM sessions WHERE user_id = :uid AND location_id = :loc AND ended_at IS NULL",
+    { uid, loc }
+  );
+  if (!s) throw new HttpError(409, "NO_OPEN_SESSION");
+  if (!earlyLeaveRequired(st, t)) throw new HttpError(409, "EARLY_LEAVE_NOT_REQUIRED");
+  if (!reason) throw new HttpError(400, "REASON_REQUIRED");
+  if (reason.length > EARLY_LEAVE_TEXT_MAX) throw new HttpError(400, "REASON_TOO_LONG");
+  const id = randomUUID();
+  try {
+    await q(
+      `INSERT INTO early_leave_requests (id, location_id, user_id, session_id, reason, requested_at, work_end_at, status)
+       VALUES (:id, :loc, :uid, :sid, :reason, :t, :end, 'pending')`,
+      { id, loc, uid, sid: s.id, reason, t, end: workEndAt(st, t) }
+    );
+  } catch (e) {
+    if (e.code === "ER_DUP_ENTRY") throw new HttpError(409, "EARLY_LEAVE_PENDING");
+    throw e;
+  }
+  const [row] = await q(`${EARLY_LEAVE_SELECT} WHERE r.id = :id`, { id });
+  return c.json(earlyLeaveRow(row), 201);
+});
+
+app.post("/me/early-leave/:id/cancel", authed, async (c) => {
+  const { uid, loc } = c.get("claims");
+  const r = await q(
+    `UPDATE early_leave_requests SET status = 'cancelled', decided_at = :t
+      WHERE id = :id AND location_id = :loc AND user_id = :uid AND status = 'pending'`,
+    { t: now(), id: c.req.param("id"), loc, uid }
+  );
+  if (!r.affectedRows) throw new HttpError(404, "REQUEST_NOT_FOUND");
+  return c.json({ ok: true });
+});
+
+app.get("/me/early-leave", authed, async (c) => {
+  const { uid, loc } = c.get("claims");
+  await autoCloseStale(loc);
+  const days = intParam(c, "days", 30);
+  if (days < 1 || days > 90) throw new HttpError(400, "INVALID_DAYS");
+  const rows = await q(
+    `${EARLY_LEAVE_SELECT}
+      WHERE r.location_id = :loc AND r.user_id = :uid AND r.requested_at >= :from
+      ORDER BY r.requested_at DESC, r.id DESC`,
+    { loc, uid, from: now() - days * 86400 }
+  );
+  const st = await getSettings(loc);
+  return c.json({ requests: rows.map(earlyLeaveRow), timezone: st?.timezone ?? "Asia/Riyadh" });
 });
 
 app.post("/session/start", authed, async (c) => {
@@ -870,7 +976,8 @@ app.post("/session/stop", authed, async (c) => {
   const body = (await c.req.json().catch(() => null)) ?? {};
   const rawNote = typeof body.note === "string" ? body.note.trim() : "";
   if (rawNote.length > NOTE_MAX) throw new HttpError(400, "NOTE_TOO_LONG");
-  const policy = (await getSettings(loc))?.note_on_stop ?? "off";
+  const st = await getSettings(loc);
+  const policy = st?.note_on_stop ?? "off";
   // With the policy off the note field is not collected, so nothing is stored.
   const note = policy === "off" || !rawNote ? null : rawNote;
 
@@ -882,6 +989,8 @@ app.post("/session/stop", authed, async (c) => {
       { uid, loc }
     );
     if (!rows.length) throw new HttpError(409, "NO_OPEN_SESSION");
+    // Before work end with the setting on, only an approved request ends the shift.
+    if (earlyLeaveRequired(st, now())) throw new HttpError(409, "EARLY_LEAVE_NEEDS_APPROVAL");
     if (policy === "required" && !note) throw new HttpError(400, "NOTE_REQUIRED");
     const s = rows[0];
     const t = now();
@@ -1289,6 +1398,92 @@ app.post("/admin/alerts/:id/dismiss", authed, managerOnly, async (c) => {
   return c.json({ ok: true });
 });
 
+app.get("/admin/early-leave", authed, managerOnly, async (c) => {
+  const { loc } = c.get("claims");
+  await autoCloseStale(loc);
+  const status = c.req.query("status") ?? "pending";
+  if (status !== "pending" && status !== "all") throw new HttpError(400, "INVALID_STATUS");
+  const days = intParam(c, "days", 30);
+  if (days < 1 || days > 90) throw new HttpError(400, "INVALID_DAYS");
+  const pendingOnly = status === "pending" ? 1 : 0;
+  const rows = await q(
+    `${EARLY_LEAVE_SELECT}
+      WHERE r.location_id = :loc AND (:pendingOnly = 0 OR r.status = 'pending')
+        AND (:pendingOnly = 1 OR r.requested_at >= :from)
+      ORDER BY r.requested_at DESC, r.id DESC`,
+    { loc, pendingOnly, from: now() - days * 86400 }
+  );
+  const st = await getSettings(loc);
+  return c.json({ requests: rows.map(earlyLeaveRow), timezone: st?.timezone ?? "Asia/Riyadh", server_time: now() });
+});
+
+// Approval ends the session at this moment (spec 2026-10-07 §4): one transaction locks the
+// request and its session, ends both, then the same follow-ups as a normal stop run.
+app.post("/admin/early-leave/:id/approve", authed, managerOnly, async (c) => {
+  const { loc, uid: manager } = c.get("claims");
+  const conn = await pool.getConnection();
+  let ended = null;
+  let expired = false;
+  try {
+    await conn.beginTransaction();
+    const [[req]] = await conn.execute(
+      `SELECT id, session_id, reason FROM early_leave_requests
+        WHERE id = :id AND location_id = :loc AND status = 'pending' FOR UPDATE`,
+      { id: c.req.param("id"), loc }
+    );
+    if (!req) throw new HttpError(404, "REQUEST_NOT_FOUND");
+    const t = now();
+    const [[s]] = await conn.execute(
+      "SELECT id, started_at, ended_at FROM sessions WHERE id = :sid AND location_id = :loc FOR UPDATE",
+      { sid: req.session_id, loc }
+    );
+    if (!s || s.ended_at != null) {
+      await conn.execute(
+        "UPDATE early_leave_requests SET status = 'expired', decided_at = :t WHERE id = :id",
+        { t, id: req.id }
+      );
+      expired = true;
+    } else {
+      await conn.execute(
+        `UPDATE sessions SET ended_at = :t, duration_sec = :dur, closed_by = 'approved', note = :note
+          WHERE id = :sid`,
+        { t, dur: t - Number(s.started_at), note: req.reason, sid: s.id }
+      );
+      await conn.execute("UPDATE breaks SET ended_at = :t WHERE session_id = :sid AND ended_at IS NULL", { t, sid: s.id });
+      await conn.execute(
+        "UPDATE early_leave_requests SET status = 'approved', decided_by = :manager, decided_at = :t WHERE id = :id",
+        { manager, t, id: req.id }
+      );
+      ended = { session_id: s.id, ended_at: t };
+    }
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback().catch(() => {});
+    throw e;
+  } finally {
+    conn.release();
+  }
+  if (expired) throw new HttpError(409, "REQUEST_EXPIRED");
+  await closeIdleOnEndedSessions(loc).catch((e) => console.error("[idle-close]", e));
+  await summarizeClosedSessions(loc).catch((e) => console.error("[activity-summary]", e));
+  return c.json({ ok: true, ...ended });
+});
+
+app.post("/admin/early-leave/:id/reject", authed, managerOnly, async (c) => {
+  const { loc, uid: manager } = c.get("claims");
+  const b = (await c.req.json().catch(() => null)) ?? {};
+  const note = typeof b.note === "string" ? b.note.trim() : "";
+  if (note.length > EARLY_LEAVE_TEXT_MAX) throw new HttpError(400, "NOTE_TOO_LONG");
+  await expireEarlyLeave(loc); // a request whose session already ended is no longer pending
+  const r = await q(
+    `UPDATE early_leave_requests SET status = 'rejected', decided_by = :manager, decided_at = :t, manager_note = :note
+      WHERE id = :id AND location_id = :loc AND status = 'pending'`,
+    { manager, t: now(), note: note || null, id: c.req.param("id"), loc }
+  );
+  if (!r.affectedRows) throw new HttpError(404, "REQUEST_NOT_FOUND");
+  return c.json({ ok: true });
+});
+
 app.put("/admin/settings", authed, managerOnly, async (c) => {
   const { loc } = c.get("claims");
   // Windows that already began under the CURRENT policy are recorded before it changes;
@@ -1351,6 +1546,10 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
   if (!Number.isInteger(idleMinutes) || idleMinutes < 1 || idleMinutes > 240) {
     throw new HttpError(400, "INVALID_IDLE_MINUTES");
   }
+  if (has("early_leave_approval") && typeof b.early_leave_approval !== "boolean") {
+    throw new HttpError(400, "INVALID_EARLY_LEAVE");
+  }
+  const earlyLeave = has("early_leave_approval") ? b.early_leave_approval : Boolean(cur.early_leave_approval);
 
   // break_policy_since moves to now only when the break policy itself changes. It is
   // assigned FIRST so it compares against the stored values: MySQL evaluates single-table
@@ -1370,14 +1569,14 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
                          breaks_enabled = :breaksEnabled, break_mode = :breakMode,
                          break_start = :breakStart, break_end = :breakEnd, break_paid = :breakPaid,
                          activity_monitoring = :monitoring, idle_minutes = :idleMinutes,
-                         note_on_stop = :notePolicy, updated_at = :t
+                         early_leave_approval = :earlyLeave, note_on_stop = :notePolicy, updated_at = :t
       WHERE location_id = :loc`,
     {
       tz: timezone, locale, target, ws: workStart, we: workEnd, wd: workDays, grace, max,
       // Kept in sync so code that still reads breaks_enabled behaves the same.
       breaksEnabled: breakMode === "flexible" ? 1 : 0, breakMode, breakStart, breakEnd,
       breakPaid: breakPaid ? 1 : 0, notePolicy, t: now(), loc,
-      monitoring: monitoring ? 1 : 0, idleMinutes,
+      monitoring: monitoring ? 1 : 0, idleMinutes, earlyLeave: earlyLeave ? 1 : 0,
     }
   );
   // Monitoring switched off: nothing detects or ends an idle stretch any more, so the ongoing
@@ -1633,6 +1832,7 @@ app.get("/*", serveStatic({ path: "./public/index.html" })); // SPA fallback
 
 setInterval(() => autoCloseStale().catch((e) => console.error("[auto-close]", e)), AUTO_CLOSE_EVERY_MS);
 setInterval(() => detectIdle().catch((e) => console.error("[idle-detect]", e)), 60 * 1000);
+setInterval(() => expireEarlyLeave().catch((e) => console.error("[early-leave-expire]", e)), 60 * 1000);
 setInterval(() => purgeOldActivity().catch((e) => console.error("[activity-retention]", e)), AUTO_CLOSE_EVERY_MS);
 
 const port = Number(env.PORT || 3000);

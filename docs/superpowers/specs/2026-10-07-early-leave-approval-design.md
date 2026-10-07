@@ -1,6 +1,6 @@
 # NourSky TimeClock — Early-leave approval (Design Spec)
 
-**Date:** 2026-10-07 · **Status:** approved in brainstorming (owner), not yet implemented
+**Date:** 2026-10-07 · **Status:** implemented and deployed 2026-10-07 (migration 007 applied)
 
 ## 1. Goal
 

@@ -74,6 +74,18 @@ _(overwrite each update)_
 ## Session Log
 _(append-only, newest on top: date · summary · files · commit)_
 
+- **2026-10-07** · **Early-leave approval** on `feature/early-leave` (plan
+  `docs/superpowers/plans/2026-10-07-early-leave-approval.md`, executed inline). Migration 007
+  (`settings.early_leave_approval`, `sessions.closed_by` += `approved`, table `early_leave_requests`) —
+  applied in production 2026-10-07 (owner, phpMyAdmin) before the merge. Server: stop guard,
+  employee request/cancel/list, manager list/approve/reject, lazy expiry, `early_leave` in `/me/status`.
+  Web: request dialog, pending/rejected/approved banners, "طلباتي", manager panel (pending + history with
+  search), settings checkbox, report label, ⚠️ title counter, `timeclock:refresh` after a decision.
+  Verified: unit 57/0, smoke 244/0, frontend 184/0, build ok, local browser run of the whole flow
+  (request → reject with note → request → approve; histories on both sides; session closed_by approved).
+  Terra install fixed earlier the same day (installed; "مربوط"). Next: owner applies 007 → merge → deploy →
+  turn the setting on for Terra (timezone Asia/Damascus, work end set).
+
 - **2026-10-07** · **Terra install fails** ("GHL رفض طلب الربط"). Log: `[oauth] OAUTH_EXCHANGE_FAILED 200`
   twice (2026-10-06 10:42, 2026-10-07 09:31 UTC): GHL answered 200 but without `access_token`/`locationId`
   — most likely an agency-level (Company / bulk) token, which the exchange does not support. The log now

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { act, render } from "@testing-library/react";
-import { usePolling } from "./usePolling.js";
+import { usePolling, REFRESH_EVENT } from "./usePolling.js";
 
 function Probe({ fn, ms }) {
   usePolling(fn, ms);
@@ -58,6 +58,15 @@ describe("usePolling", () => {
     act(() => { vi.advanceTimersByTime(30000); });
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-runs at once on the app-wide refresh event, even right after another run", () => {
+    vi.useFakeTimers();
+    const fn = vi.fn(async () => {});
+    render(<Probe fn={fn} ms={30000} />);
+    act(() => { setVisibility("visible"); });
+    act(() => { window.dispatchEvent(new Event(REFRESH_EVENT)); });
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 
   it("stops after unmount", () => {

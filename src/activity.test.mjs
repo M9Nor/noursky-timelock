@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   ALL_DAYS, localWeekday, isWithinWorkHours, isFreshEvent, activeSeconds, lastActivityAt, idleSeconds, sessionSummary,
-  onBreakAt, idleAlertAt, isLateActivity,
+  onBreakAt, idleAlertAt, isLateActivity, workEndAt, earlyLeaveRequired,
 } from "./activity.js";
 
 const utc = (...a) => Date.UTC(...a) / 1000;
@@ -115,4 +115,30 @@ test("isLateActivity: an event before the stretch reached the threshold", () => 
   assert.equal(isLateActivity({ fromAt: 1000, occurredAt: 1060, idleMinutes: 1 }), false);
   // break time inside the gap does not count towards the threshold
   assert.equal(isLateActivity({ fromAt: 0, occurredAt: 700, breaks: [[100, 400]], idleMinutes: 10 }), true);
+});
+
+test("workEndAt: today's work end in the location's timezone, null without hours", () => {
+  // Monday 2026-10-05, 17:00 Dubai = 13:00Z.
+  assert.equal(workEndAt(DUBAI, utc(2026, 9, 5, 8, 0)), utc(2026, 9, 5, 13, 0));
+  assert.equal(workEndAt({ ...DUBAI, work_end: null }, utc(2026, 9, 5, 8, 0)), null);
+  assert.equal(workEndAt({ ...DUBAI, work_start: "18:00" }, utc(2026, 9, 5, 8, 0)), null);
+});
+
+test("earlyLeaveRequired: on, a working day, before work end", () => {
+  const on = { ...DUBAI, early_leave_approval: true };
+  assert.equal(earlyLeaveRequired(on, utc(2026, 9, 5, 12, 59, 59)), true);   // 16:59:59 Dubai
+  assert.equal(earlyLeaveRequired(on, utc(2026, 9, 5, 13, 0, 0)), false);    // 17:00 Dubai
+  assert.equal(earlyLeaveRequired(on, utc(2026, 9, 5, 3, 0)), true);         // 07:00, before work start
+  assert.equal(earlyLeaveRequired(DUBAI, utc(2026, 9, 5, 8, 0)), false);     // setting off
+  assert.equal(earlyLeaveRequired({ ...on, work_end: null }, utc(2026, 9, 5, 8, 0)), false);
+  // Monday off (bit 1 cleared): no approval needed.
+  assert.equal(earlyLeaveRequired({ ...on, work_days: ALL_DAYS & ~2 }, utc(2026, 9, 5, 8, 0)), false);
+});
+
+test("earlyLeaveRequired uses the location's day (Damascus vs UTC)", () => {
+  const dam = { timezone: "Asia/Damascus", work_start: "09:00", work_end: "17:00", work_days: ALL_DAYS, early_leave_approval: true };
+  // 2026-10-05 13:30Z is 16:30 in Damascus (UTC+3): still before 17:00.
+  assert.equal(earlyLeaveRequired(dam, utc(2026, 9, 5, 13, 30)), true);
+  // 14:00Z is 17:00 Damascus: over.
+  assert.equal(earlyLeaveRequired(dam, utc(2026, 9, 5, 14, 0)), false);
 });
