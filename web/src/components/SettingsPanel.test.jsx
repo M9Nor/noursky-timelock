@@ -269,4 +269,17 @@ describe("SettingsPanel", () => {
     await waitFor(() => expect(api.put).toHaveBeenCalled());
     expect(document.documentElement.dir).toBe("rtl");
   });
+
+  it("saves the early-leave approval setting and warns without a work end", async () => {
+    const api = {
+      get: vi.fn(async (p) => (p === "/admin/settings" ? { ...WH, work_end: null, early_leave_approval: false } : { installed: false })),
+      put: vi.fn(async (_path, body) => body),
+    };
+    wrap(<SettingsPanel api={api} />);
+    fireEvent.click(await screen.findByLabelText("الإنهاء قبل نهاية الدوام بيحتاج موافقة المدير"));
+    expect(screen.getByText("لازم يكون وقت نهاية الدوام محدد")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(api.put.mock.calls[0][1]).toEqual(expect.objectContaining({ early_leave_approval: true }));
+  });
 });

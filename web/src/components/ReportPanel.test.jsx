@@ -180,4 +180,11 @@ describe("ReportPanel", () => {
     expect(screen.getByText("Automatic")).toBeInTheDocument();
     expect(screen.getByText("Manager")).toBeInTheDocument();
   });
+
+  it("labels a session that ended with the manager's approval", async () => {
+    const sessions = [{ id: "s1", started_at: 1000, ended_at: 4600, break_sec: 0, note: "موعد", late_by_sec: null, closed_by: "approved" }];
+    wrap(<ReportPanel api={makeApi({ sessions })} />);
+    fireEvent.click(await screen.findByText("أحمد"));
+    expect(await screen.findByText("بموافقة المدير")).toBeInTheDocument();
+  });
 });

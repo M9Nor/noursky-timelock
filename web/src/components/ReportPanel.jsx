@@ -12,7 +12,7 @@ export function weekRange() { const to = Math.floor(Date.now() / 1000); return {
 export function monthRange() { const to = Math.floor(Date.now() / 1000); return { from: to - 30 * 86400, to }; }
 const PRESET_RANGES = { today: todayRange, week: weekRange, month: monthRange };
 
-const CLOSED_BY = new Set(["user", "auto", "admin"]);
+const CLOSED_BY = new Set(["user", "auto", "admin", "approved"]);
 
 const toDateInput = (sec) => new Date(sec * 1000).toISOString().slice(0, 10);
 const fromDateInput = (v, endOfDay) => Math.floor(new Date(v + (endOfDay ? "T23:59:59" : "T00:00:00")).getTime() / 1000);

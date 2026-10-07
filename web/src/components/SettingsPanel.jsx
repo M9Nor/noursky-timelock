@@ -64,6 +64,7 @@ export default function SettingsPanel({ api }) {
         break_paid: Boolean(s.break_paid),
         note_on_stop: s.note_on_stop ?? "off",
         activity_monitoring: Boolean(s.activity_monitoring),
+        early_leave_approval: Boolean(s.early_leave_approval),
         // Same empty-field rule as the grace: an emptied field means the default.
         idle_minutes: s.idle_minutes === "" || s.idle_minutes == null ? 30 : Number(s.idle_minutes),
         locale: s.locale ?? "ar",
@@ -125,6 +126,11 @@ export default function SettingsPanel({ api }) {
           <option value="optional">{t("settings.noteOptional")}</option>
           <option value="required">{t("settings.noteRequired")}</option>
         </select>
+      </div>
+      <div className="field check">
+        <label><input id="early-leave" type="checkbox" checked={Boolean(s.early_leave_approval)}
+          onChange={(e) => setS({ ...s, early_leave_approval: e.target.checked })} />{t("settings.earlyLeave")}</label>
+        {s.early_leave_approval && !s.work_end && <p className="hint">{t("settings.earlyLeaveHint")}</p>}
       </div>
       <div className="field check">
         <label><input id="activity-monitoring" type="checkbox" checked={Boolean(s.activity_monitoring)} onChange={(e) => setS({ ...s, activity_monitoring: e.target.checked })} />{t("settings.monitoring")}</label>
