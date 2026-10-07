@@ -280,11 +280,14 @@ role === "admin"  أو  type === "agency"   →  manager
 | GET | `/me/settings` | `{ daily_target_hours, timezone, work_start, note_on_stop, break_mode, break_start, break_end, break_paid, breaks_enabled }` — `breaks_enabled` قديم (legacy)، متزامن مع `break_mode = 'flexible'` |
 | PUT | `/me/locale` | Body: `{ locale: "ar" \| "en" \| null }` — اللغة الشخصية؛ `null` = اتّبع لغة الشركة → `{ locale }` (اللغة الفعلية بعد الحفظ) · `400 INVALID_LOCALE` |
 | POST | `/session/start` | `201 { id, started_at }` · `409 SESSION_ALREADY_OPEN` · بيسكّر تنبيه «عم يشتغل بدون دوام» المفتوح (`resolution = clocked_in`) |
-| POST | `/session/stop` | Body اختياري: `{ note }` (حد أقصى 500 حرف). `200 { id, started_at, ended_at, duration_sec, break_sec, note }` — `duration_sec` المدة الكاملة، ووقت العمل = `duration_sec − break_sec`. إذا في استراحة مفتوحة بتسكّر معها. الملاحظة بتنحفظ بس إذا سياسة `note_on_stop` مش `off` · `400 NOTE_REQUIRED` · `400 NOTE_TOO_LONG` · `409 NO_OPEN_SESSION` |
+| POST | `/session/stop` | Body اختياري: `{ note }` (حد أقصى 500 حرف). `200 { id, started_at, ended_at, duration_sec, break_sec, note }` — `duration_sec` المدة الكاملة، ووقت العمل = `duration_sec − break_sec`. إذا في استراحة مفتوحة بتسكّر معها. الملاحظة بتنحفظ بس إذا سياسة `note_on_stop` مش `off` · `400 NOTE_REQUIRED` · `400 NOTE_TOO_LONG` · `409 NO_OPEN_SESSION` · `409 EARLY_LEAVE_NEEDS_APPROVAL` (قبل نهاية الدوام والإعداد `early_leave_approval` شغّال) |
 | POST | `/session/break/start` | `201 { id, session_id, started_at }` · `403 BREAKS_DISABLED` · `409 NO_OPEN_SESSION` · `409 BREAK_ALREADY_OPEN` — مسموح بس لما `break_mode = flexible` |
 | POST | `/session/break/stop` | `200 { id, started_at, ended_at, duration_sec }` · `409 NO_OPEN_BREAK` — مسموح حتى لو المدير لغى الاستراحات |
 | GET | `/me/alerts` | تنبيهاتي المفتوحة: تنبيهات "بدون دوام" المفتوحة، وتنبيهات الخمول **الجارية** بس (`to_at` = null) → `{ alerts, timezone, server_time }` |
 | POST | `/me/alerts/:id/note` | Body: `{ note }` (حد أقصى 300 حرف) — ملاحظة الموظف على تنبيهه المفتوح · `400 NOTE_REQUIRED` · `400 NOTE_TOO_LONG` · `404 ALERT_NOT_FOUND` |
+| POST | `/me/early-leave` | Body: `{ reason }` (إجباري، حد أقصى 300 حرف) — طلب إنهاء الدوام قبل نهايته → `201 Request` · `409 NO_OPEN_SESSION` · `409 EARLY_LEAVE_NOT_REQUIRED` · `400 REASON_REQUIRED` · `400 REASON_TOO_LONG` · `409 EARLY_LEAVE_PENDING` |
+| POST | `/me/early-leave/:id/cancel` | إلغاء طلب معلّق إلو → `{ ok: true }` · `404 REQUEST_NOT_FOUND` |
+| GET | `/me/early-leave?days=30` | طلباته (1–90 يوم، الأحدث أول) → `{ requests: Request[], timezone }` · `400 INVALID_DAYS`. `Request` = `{ id, user_id, session_id, reason, requested_at, work_end_at, status (pending/approved/rejected/cancelled/expired), decided_by, decided_at, manager_note, name, decided_by_name }`. `/me/status` كمان بيرجّع `early_leave: { required, work_end_at, timezone, pending, last }` (`last` = آخر طلب انحسم اليوم) |
 
 ### المدير (`role = manager` فقط، غير هيك `403 FORBIDDEN`)
 
@@ -338,6 +341,12 @@ role === "admin"  أو  type === "agency"   →  manager
 | `INVALID_BREAK_WINDOW` | 400 | وقت الاستراحة الثابتة ناقص أو غلط أو النهاية قبل البداية | وقت الاستراحة غير صحيح |
 | `BREAK_ALREADY_OPEN` | 409 | | أنت في استراحة بالفعل |
 | `NO_OPEN_BREAK` | 409 | | لا توجد استراحة مفتوحة |
+| `EARLY_LEAVE_NEEDS_APPROVAL` | 409 | إنهاء قبل نهاية الدوام والإعداد شغّال | لازم موافقة المدير |
+| `EARLY_LEAVE_NOT_REQUIRED` | 409 | طلب إنهاء مبكر بس الموافقة مو لازمة (بعد النهاية أو الإعداد مطفي) | فيك تنهي عادي |
+| `EARLY_LEAVE_PENDING` | 409 | في طلب معلّق لنفس الجلسة | عندك طلب معلّق |
+| `REASON_TOO_LONG` | 400 | السبب أطول من 300 حرف | السبب طويل كتير |
+| `REQUEST_NOT_FOUND` | 404 | الطلب مو موجود أو مو معلّق أو مو إلك | الطلب ما عاد موجود |
+| `INVALID_EARLY_LEAVE` | 400 | `early_leave_approval` مش boolean | إعداد غير صحيح |
 | `NOTE_REQUIRED` | 400 | المدير خلّى الملاحظة إلزامية | اكتب ملاحظة قبل إنهاء الدوام |
 | `NOTE_TOO_LONG` | 400 | أكتر من 500 حرف (ملاحظة الإنهاء) أو 300 (ملاحظة التنبيه) | الملاحظة طويلة جداً |
 | `INVALID_IDLE_MINUTES` | 400 | حد الخمول مش رقم صحيح بين 1 و240 | حد الخمول لازم يكون بين 1 و240 دقيقة |
