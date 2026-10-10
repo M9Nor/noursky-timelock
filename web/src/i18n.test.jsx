@@ -23,6 +23,10 @@ describe("dictionaries", () => {
   it("keep English free of Arabic letters", () => {
     expect(Object.entries(en).filter(([k, v]) => !NATIVE_NAMES.has(k) && ARABIC.test(v))).toEqual([]);
   });
+  it("never name the platform behind the app (white-label)", () => {
+    const PLATFORM = /marketplace|\bghl\b|highlevel|leadconnector/i;
+    expect([...Object.entries(ar), ...Object.entries(en)].filter(([, v]) => PLATFORM.test(v))).toEqual([]);
+  });
   it("leave no Arabic text in translated files", () => {
     const offenders = TRANSLATED_FILES.filter((f) => ARABIC.test(readFileSync(resolve(process.cwd(), "src", f), "utf8")));
     expect(offenders).toEqual([]);

@@ -1742,21 +1742,21 @@ const DEFAULT_REDIRECT_URI = "https://timeclock.noursky.com/oauth/callback";
 const INSTALL_TEXT = {
   ar: {
     failed: "تعذّر التثبيت", connected: "تم الربط",
-    missingCode: "الرابط ناقص. أعد تثبيت التطبيق من الـ Marketplace.",
-    notConfigured: "الربط مع GHL غير مُعدّ على السيرفر بعد. تواصل مع NourSky.",
-    unreachable: "ما قدرنا نوصل لـ GHL. جرّب تعيد التثبيت بعد شوي.",
-    refused: "GHL رفض طلب الربط. أعد تثبيت التطبيق من الـ Marketplace.",
-    storeFailed: "صار خطأ أثناء حفظ الربط. أعد تثبيت التطبيق من الـ Marketplace.",
-    done: "تم ربط TimeClock بحسابك. بتقدر تسكّر هالصفحة وترجع لـ GHL.",
+    missingCode: "الرابط ناقص. جرّب التثبيت مرة تانية.",
+    notConfigured: "الربط غير مُعدّ على السيرفر بعد. تواصل مع NourSky.",
+    unreachable: "ما قدرنا نكمّل الربط هلّق. جرّب التثبيت مرة تانية بعد شوي.",
+    refused: "ما زبط الربط. جرّب التثبيت مرة تانية، وإذا تكررت تواصل مع NourSky.",
+    storeFailed: "صار خطأ أثناء حفظ الربط. جرّب التثبيت مرة تانية.",
+    done: "تم ربط TimeClock بحسابك. بتقدر تسكّر هالصفحة وترجع لحسابك.",
   },
   en: {
     failed: "Installation failed", connected: "Connected",
-    missingCode: "The link is incomplete. Reinstall the app from the Marketplace.",
-    notConfigured: "The GHL connection is not set up on the server yet. Contact NourSky.",
-    unreachable: "We couldn't reach GHL. Try reinstalling in a moment.",
-    refused: "GHL refused the connection request. Reinstall the app from the Marketplace.",
-    storeFailed: "Something went wrong while saving the connection. Reinstall the app from the Marketplace.",
-    done: "TimeClock is connected to your account. You can close this page and return to GHL.",
+    missingCode: "The link is incomplete. Try installing again.",
+    notConfigured: "The connection is not set up on the server yet. Contact NourSky.",
+    unreachable: "We couldn't complete the connection right now. Try installing again in a moment.",
+    refused: "The connection didn't go through. Try installing again; if it keeps happening, contact NourSky.",
+    storeFailed: "Something went wrong while saving the connection. Try installing again.",
+    done: "TimeClock is connected to your account. You can close this page and return to your account.",
   },
 };
 /** The install page runs before we know the user: Arabic for an Arabic browser, else English. */
