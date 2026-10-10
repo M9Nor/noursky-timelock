@@ -113,18 +113,21 @@ describe("SettingsPanel", () => {
   it("shows a working connection with the last event time and the 24h count", async () => {
     const last = Date.UTC(2026, 8, 29, 8, 42) / 1000; // 11:42 in Riyadh
     wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true }, { installed: true, has_activity_scope: true, last_event_at: last, events_24h: 17 })} />);
-    const status = await screen.findByRole("status", { name: "حالة الربط مع GHL" });
+    const status = await screen.findByRole("status", { name: "حالة الربط" });
     await waitFor(() => expect(status.textContent).toContain("مربوط"));
     expect(status.textContent).toContain("11:42");
     expect(status.textContent).toContain("17 حدث");
     expect(status.textContent).not.toContain("غير مربوط");
   });
 
-  it("tells the manager to reinstall when the activity scope is missing", async () => {
-    wrap(<SettingsPanel api={awApi(AW, { installed: true, has_activity_scope: false, last_event_at: null, events_24h: 0 })} />);
-    const status = await screen.findByRole("status", { name: "حالة الربط مع GHL" });
-    await waitFor(() => expect(status.textContent).toContain("غير مربوط"));
-    expect(status.textContent).toContain("أعد تثبيت التطبيق");
+  it("shows no connection line, and no monitoring notice, when the activity scope is missing", async () => {
+    const api = awApi(AW, { installed: true, has_activity_scope: false, last_event_at: null, events_24h: 0 });
+    wrap(<SettingsPanel api={api} />);
+    await screen.findByLabelText("مراقبة النشاط");
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/admin/ghl-connection"));
+    expect(screen.queryByRole("status", { name: "حالة الربط" })).toBeNull();
+    expect(screen.queryByText(/غير مربوط/)).toBeNull();
+    expect(screen.queryByText(/عارفين إنه نشاطهم مراقب/)).toBeNull();
   });
 
   it("explains an idle threshold out of range", async () => {
@@ -149,18 +152,19 @@ describe("SettingsPanel", () => {
     expect(await screen.findByText("حد الخمول لازم يكون بين 1 و240 دقيقة")).toBeInTheDocument();
   });
 
-  it("shows not connected after an uninstall even though an old event time remains", async () => {
+  it("does not show connected after an uninstall even though an old event time remains", async () => {
     const last = Date.UTC(2026, 8, 20, 8, 42) / 1000;
-    wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true }, { installed: false, has_activity_scope: true, last_event_at: last, events_24h: 0 })} />);
-    const status = await screen.findByRole("status", { name: "حالة الربط مع GHL" });
-    await waitFor(() => expect(status.textContent).toContain("غير مربوط"));
-    expect(status.textContent).not.toContain("✓ مربوط");
+    const api = awApi({ ...AW, activity_monitoring: true }, { installed: false, has_activity_scope: true, last_event_at: last, events_24h: 0 });
+    wrap(<SettingsPanel api={api} />);
+    await screen.findByLabelText("مراقبة النشاط");
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/admin/ghl-connection"));
+    expect(screen.queryByText(/مربوط/)).toBeNull();
   });
 
   it("shows connected when events flow although the scope was not stored", async () => {
     const last = Date.UTC(2026, 8, 29, 8, 42) / 1000;
     wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true }, { installed: true, has_activity_scope: false, last_event_at: last, events_24h: 3 })} />);
-    const status = await screen.findByRole("status", { name: "حالة الربط مع GHL" });
+    const status = await screen.findByRole("status", { name: "حالة الربط" });
     await waitFor(() => expect(status.textContent).toContain("✓ مربوط"));
     expect(status.textContent).toContain("3 حدث");
   });
@@ -173,8 +177,8 @@ describe("SettingsPanel", () => {
     wrap(<SettingsPanel api={api} />);
     expect(await screen.findByLabelText("مراقبة النشاط")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /حفظ/ })).toBeInTheDocument();
-    const status = screen.getByRole("status", { name: "حالة الربط مع GHL" });
-    await waitFor(() => expect(status.textContent).toContain("تعذّر فحص حالة الربط مع GHL"));
+    const status = screen.getByRole("status", { name: "حالة الربط" });
+    await waitFor(() => expect(status.textContent).toContain("تعذّر فحص حالة الربط"));
     expect(screen.queryByText("حدث خطأ، حاول مرة أخرى")).not.toBeInTheDocument();
   });
 

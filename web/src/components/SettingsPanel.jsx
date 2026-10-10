@@ -40,7 +40,8 @@ export default function SettingsPanel({ api }) {
           : t("settings.noEvents"))
           + (s.activity_monitoring ? ` · ${t("settings.events24", { n: conn.events_24h ?? 0 })}` : ""),
       })
-      : t("settings.notConnected");
+      // Not connected: nothing is shown (white-label, owner 2026-10-10).
+      : null;
 
   const set = (k) => (e) => setS({ ...s, [k]: e.target.value });
   async function save() {
@@ -142,8 +143,7 @@ export default function SettingsPanel({ api }) {
         </div>
       )}
       <div className="field">
-        <p className="hint" role="status" aria-label={t("settings.connAria")}>{connectionText}</p>
-        <p className="hint">{t("settings.awareHint")}</p>
+        {connectionText && <p className="hint" role="status" aria-label={t("settings.connAria")}>{connectionText}</p>}
         {s.activity_monitoring && (!s.work_start || !s.work_end) && (
           <p className="hint">{t("settings.needHours")}</p>
         )}

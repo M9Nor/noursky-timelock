@@ -1219,7 +1219,7 @@ check("a webhook over 256 KB → 413 PAYLOAD_TOO_LARGE",
 // OAuth callback. The local .env has no GHL_CLIENT_ID, so a code cannot be exchanged here.
 const awNoCode = await fetch(`${BASE}/oauth/callback`, { headers: { "Accept-Language": "ar" } });
 check("the OAuth callback without a code shows an error page",
-  awNoCode.status === 400 && (await awNoCode.text()).includes("أعد تثبيت التطبيق"));
+  awNoCode.status === 400 && (await awNoCode.text()).includes("جرّب التثبيت مرة تانية"));
 const awBadCode = await fetch(`${BASE}/oauth/callback?code=test-code`, { headers: { "Accept-Language": "ar" } });
 const awBadCodeText = await awBadCode.text();
 check("the OAuth callback with a bad code shows an Arabic error page (503 unconfigured / 502 refused)",
@@ -1246,9 +1246,11 @@ check("a body without locale → 400", (await call(lgE.body?.token, "PUT", "/me/
 const lgInstallEn = await fetch(`${BASE}/oauth/callback`, { headers: { "Accept-Language": "en-US,en;q=0.9" } });
 const lgInstallEnText = await lgInstallEn.text();
 check("the install page speaks English to an English browser",
-  lgInstallEn.status === 400 && lgInstallEnText.includes('lang="en"') && lgInstallEnText.includes("Reinstall the app"));
+  lgInstallEn.status === 400 && lgInstallEnText.includes('lang="en"') && lgInstallEnText.includes("Try installing again"));
 const lgInstallAr = await (await fetch(`${BASE}/oauth/callback`, { headers: { "Accept-Language": "ar-SY,ar;q=0.9,en;q=0.5" } })).text();
-check("the install page speaks Arabic to an Arabic browser", lgInstallAr.includes('dir="rtl"') && lgInstallAr.includes("أعد تثبيت التطبيق"));
+check("the install page speaks Arabic to an Arabic browser", lgInstallAr.includes('dir="rtl"') && lgInstallAr.includes("جرّب التثبيت مرة تانية"));
+check("install pages never name the platform behind the app",
+  ![lgInstallEnText, lgInstallAr].some((t) => /marketplace|\bghl\b|highlevel|leadconnector/i.test(t)));
 await cleanupLocation(LGLOC);
 
 check("tampered token → 401", (await call(E.slice(0, -2) + "xx", "GET", "/me/status")).status === 401);
