@@ -20,6 +20,7 @@
  */
 import CryptoJS from "crypto-js";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { signTestWebhook } from "./fixtures/ghl-test-webhook-key.mjs";
 
 const BASE = process.env.BASE_URL || "http://localhost:3000";
@@ -1226,9 +1227,10 @@ check("the OAuth callback without a code shows an error page",
   awNoCode.status === 400 && (await awNoCode.text()).includes("جرّب التثبيت مرة تانية"));
 const awBadCode = await fetch(`${BASE}/oauth/callback?code=test-code`, { headers: { "Accept-Language": "ar" } });
 const awBadCodeText = await awBadCode.text();
-check("the OAuth callback with a bad code shows an Arabic error page (503 unconfigured / 502 refused)",
+check("the OAuth callback with a bad code shows an Arabic error page (503 unconfigured / 502 refused / 504 unreachable)",
   (awBadCode.status === 503 && awBadCodeText.includes("غير مُعدّ")) ||
-  (awBadCode.status === 502 && awBadCodeText.includes("GHL رفض")));
+  (awBadCode.status === 502 && awBadCodeText.includes("ما زبط الربط")) ||
+  (awBadCode.status === 504 && awBadCodeText.includes("ما قدرنا نكمّل الربط")), `(${awBadCode.status})`);
 await cleanupLocation(AWLOC);
 
 // --- Language (bilingual spec). Own location.
@@ -1455,6 +1457,43 @@ if (!awAcceptsTestKey || plBack === null) {
   check("a pipeline update never opens a working-without-clocking-in alert", plNci.length === 0, `(${JSON.stringify(plNci)})`);
 }
 await cleanupLocation(PLLOC);
+
+// --- Agency-level (bulk) install or update: GHL answers the code exchange with a Company token.
+// Needs the API started with GHL_TOKEN_URL pointing at the fake token server below (development/test
+// only), plus GHL_CLIENT_ID / GHL_CLIENT_SECRET / TOKEN_ENC_KEY; otherwise SKIP.
+if (!process.env.GHL_TOKEN_URL || !awAcceptsTestKey) {
+  console.log("  SKIP  agency-level install checks (start the API and this test with GHL_TOKEN_URL)");
+} else {
+  const BUCO = `${LOC}-co`;
+  // Like GHL: only the expected code is accepted; any other code is refused.
+  const fake = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => { body += d; });
+    req.on("end", () => {
+      res.setHeader("Content-Type", "application/json");
+      if (new URLSearchParams(body).get("code") !== "bulk-code") { res.statusCode = 400; res.end('{"error":"invalid_grant"}'); return; }
+      res.end(JSON.stringify({ access_token: "a", refresh_token: "r", userType: "Company", companyId: BUCO,
+        isBulkInstallation: true, approveAllLocations: true, scope: "users.readonly conversations/message.readonly opportunities.readonly" }));
+    });
+  });
+  await new Promise((r) => fake.listen(Number(new URL(process.env.GHL_TOKEN_URL).port), r));
+  const buLocs = [`${LOC}-bu1`, `${LOC}-bu2`];
+  for (const l of buLocs) await ghlWebhook({ type: "INSTALL", locationId: l, companyId: BUCO, appId: AWAPP, webhookId: `${l}-install` });
+  const buMgr = await sso({ userId: `${buLocs[0]}-m1`, role: "admin", type: "account", activeLocation: buLocs[0], userName: "مدير", email: "bu@x.com" });
+  check("(precondition) installed by webhook but without the activity scope yet",
+    (await call(buMgr.body?.token, "GET", "/admin/ghl-connection")).body?.has_activity_scope === false);
+  const buCb = await fetch(`${BASE}/oauth/callback?code=bulk-code`, { headers: { "Accept-Language": "ar" } });
+  check("an agency-level install shows the connected page", buCb.status === 200 && (await buCb.text()).includes("تم الربط"), `(${buCb.status})`);
+  check("an agency-level install gives the company's sub-accounts the activity scope",
+    (await call(buMgr.body?.token, "GET", "/admin/ghl-connection")).body?.has_activity_scope === true);
+  const buNew = `${LOC}-bu3`;
+  await ghlWebhook({ type: "INSTALL", locationId: buNew, companyId: BUCO, appId: AWAPP, webhookId: `${buNew}-install` });
+  const buNewMgr = await sso({ userId: `${buNew}-m1`, role: "admin", type: "account", activeLocation: buNew, userName: "مدير", email: "bu3@x.com" });
+  check("a sub-account installed later by the agency inherits the scope",
+    (await call(buNewMgr.body?.token, "GET", "/admin/ghl-connection")).body?.has_activity_scope === true);
+  await new Promise((r) => fake.close(r));
+  for (const l of [...buLocs, buNew]) await cleanupLocation(l);
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

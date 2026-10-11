@@ -28,6 +28,11 @@ export async function exchangeCode({ code, clientId, clientSecret, redirectUri, 
   }
   let data = null;
   try { data = await res.json(); } catch { /* non-JSON error page */ }
+  // An install or update made from the agency for its sub-accounts (bulk) returns a Company
+  // token: we only need which company and what it granted, so the token itself is not kept.
+  if (res.ok && data?.access_token && !data?.locationId && data?.userType === "Company" && data?.companyId) {
+    return { kind: "company", companyId: data.companyId, scopes: data.scope ?? "" };
+  }
   if (!res.ok || !data?.access_token || !data?.locationId) {
     const err = new Error("OAUTH_EXCHANGE_FAILED");
     err.status = res.status;
@@ -35,6 +40,7 @@ export async function exchangeCode({ code, clientId, clientSecret, redirectUri, 
     throw err;
   }
   return {
+    kind: "location",
     accessToken: data.access_token,
     refreshToken: data.refresh_token ?? null,
     expiresIn: Number(data.expires_in) || 0,
