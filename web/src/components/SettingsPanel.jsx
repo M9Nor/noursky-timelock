@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Button from "./Button.jsx";
 import { useToast } from "./ToastContext.jsx";
-import { formatStamp } from "../time.js";
 import { useI18n } from "../i18n.jsx";
 
 // Saturday first, as the week reads in the region; bit = JavaScript getDay() (0 = Sunday).
@@ -15,33 +14,14 @@ const SPECIFIC_ERRORS = new Set([
 ]);
 
 export default function SettingsPanel({ api }) {
-  const { t, setLocale } = useI18n();
-  const loadedLocale = useRef(null); // the company language as last loaded/saved (not the unsaved form value)
+  const { t } = useI18n();
   const [s, setS] = useState(null);
   const [error, setError] = useState("");
-  const [conn, setConn] = useState(null);
-  const [connFailed, setConnFailed] = useState(false);
   const toast = useToast();
 
-  useEffect(() => { api.get("/admin/settings").then((r) => { loadedLocale.current = r.locale ?? "ar"; setS(r); }).catch(() => setError("err.generic")); }, []);
-  // The connection status is informative only; a failure never blocks the settings form.
-  useEffect(() => { api.get("/admin/ghl-connection").then(setConn).catch(() => setConnFailed(true)); }, []);
+  useEffect(() => { api.get("/admin/settings").then(setS).catch(() => setError("err.generic")); }, []);
   if (!s && !error) return <div className="panel muted">{t("common.loading")}</div>;
   if (!s) return <div className="panel error">{t("err.generic")}</div>;
-
-  // last_event_at outlives an uninstall, so it only feeds the sub-text, never "connected".
-  const connected = Boolean(conn && conn.installed && (conn.has_activity_scope || conn.events_24h > 0));
-  const connectionText = connFailed || (!conn && s)
-    ? (connFailed ? t("settings.connFailed") : t("settings.connChecking"))
-    : connected
-      ? t("settings.connected", {
-        detail: (conn.last_event_at != null
-          ? t("settings.lastEvent", { time: formatStamp(conn.last_event_at, s.timezone) })
-          : t("settings.noEvents"))
-          + (s.activity_monitoring ? ` · ${t("settings.events24", { n: conn.events_24h ?? 0 })}` : ""),
-      })
-      // Not connected: nothing is shown (white-label, owner 2026-10-10).
-      : null;
 
   const set = (k) => (e) => setS({ ...s, [k]: e.target.value });
   async function save() {
@@ -66,15 +46,10 @@ export default function SettingsPanel({ api }) {
         note_on_stop: s.note_on_stop ?? "off",
         activity_monitoring: Boolean(s.activity_monitoring),
         early_leave_approval: Boolean(s.early_leave_approval),
-        pipeline_activity: Boolean(s.pipeline_activity),
         // Same empty-field rule as the grace: an emptied field means the default.
         idle_minutes: s.idle_minutes === "" || s.idle_minutes == null ? 30 : Number(s.idle_minutes),
-        locale: s.locale ?? "ar",
       });
       setS(saved); toast(t("settings.saved"));
-      // The company language is what this manager sees by default: switch now, but it is not a personal choice (no PUT /me/locale).
-      if (saved.locale && saved.locale !== loadedLocale.current) setLocale(saved.locale, { persist: false });
-      loadedLocale.current = saved.locale ?? loadedLocale.current;
     } catch (e) {
       setError(SPECIFIC_ERRORS.has(e.code) ? `err.${e.code}` : "err.generic");
     }
@@ -132,7 +107,6 @@ export default function SettingsPanel({ api }) {
       <div className="field check">
         <label><input id="early-leave" type="checkbox" checked={Boolean(s.early_leave_approval)}
           onChange={(e) => setS({ ...s, early_leave_approval: e.target.checked })} />{t("settings.earlyLeave")}</label>
-        {s.early_leave_approval && !s.work_end && <p className="hint">{t("settings.earlyLeaveHint")}</p>}
       </div>
       <div className="field check">
         <label><input id="activity-monitoring" type="checkbox" checked={Boolean(s.activity_monitoring)} onChange={(e) => setS({ ...s, activity_monitoring: e.target.checked })} />{t("settings.monitoring")}</label>
@@ -143,29 +117,6 @@ export default function SettingsPanel({ api }) {
           <input id="idle-minutes" type="number" step="1" min="1" max="240" value={s.idle_minutes ?? 30} onChange={set("idle_minutes")} />
         </div>
       )}
-      {s.activity_monitoring && (
-        <div className="field check">
-          <label><input id="pipeline-activity" type="checkbox" checked={Boolean(s.pipeline_activity)}
-            onChange={(e) => setS({ ...s, pipeline_activity: e.target.checked })} />{t("settings.pipelineActivity")}</label>
-          {s.pipeline_activity && <p className="hint">{t("settings.pipelineHint")}</p>}
-        </div>
-      )}
-      <div className="field">
-        {connectionText && <p className="hint" role="status" aria-label={t("settings.connAria")}>{connectionText}</p>}
-        {s.activity_monitoring && (!s.work_start || !s.work_end) && (
-          <p className="hint">{t("settings.needHours")}</p>
-        )}
-        {conn?.unknown_active_users > 0 && (
-          <p className="hint">{t("settings.unknownUsers", { n: conn.unknown_active_users })}</p>
-        )}
-      </div>
-      <div className="field">
-        <label htmlFor="company-locale">{t("settings.companyLang")}</label>
-        <select id="company-locale" value={s.locale ?? "ar"} onChange={set("locale")}>
-          <option value="ar">{t("settings.langAr")}</option>
-          <option value="en">{t("settings.langEn")}</option>
-        </select>
-      </div>
       {error && <div className="field"><span className="err">{t(error)}</span></div>}
       <div className="dlg-a"><Button onClick={save}>{t("common.save")}</Button></div>
     </section>

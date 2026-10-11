@@ -8,7 +8,7 @@ import en from "./locales/en.js";
 
 const ARABIC = /[؀-ۿ]/;
 // Each language's own name is written in that language in both dictionaries.
-const NATIVE_NAMES = new Set(["lang.switch", "settings.langAr"]);
+const NATIVE_NAMES = new Set(["lang.switch"]);
 // Paths are relative to src/ and resolved from the web/ working directory (vitest runs there; import.meta.url is not a file: URL under jsdom).
 // Every component and App.jsx: user-visible text must come only from the dictionaries.
 const TRANSLATED_FILES = [

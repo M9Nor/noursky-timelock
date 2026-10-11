@@ -110,26 +110,6 @@ describe("SettingsPanel", () => {
     expect(screen.queryByLabelText("حد الخمول (دقائق)")).not.toBeInTheDocument();
   });
 
-  it("shows a working connection with the last event time and the 24h count", async () => {
-    const last = Date.UTC(2026, 8, 29, 8, 42) / 1000; // 11:42 in Riyadh
-    wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true }, { installed: true, has_activity_scope: true, last_event_at: last, events_24h: 17 })} />);
-    const status = await screen.findByRole("status", { name: "حالة الربط" });
-    await waitFor(() => expect(status.textContent).toContain("مربوط"));
-    expect(status.textContent).toContain("11:42");
-    expect(status.textContent).toContain("17 حدث");
-    expect(status.textContent).not.toContain("غير مربوط");
-  });
-
-  it("shows no connection line, and no monitoring notice, when the activity scope is missing", async () => {
-    const api = awApi(AW, { installed: true, has_activity_scope: false, last_event_at: null, events_24h: 0 });
-    wrap(<SettingsPanel api={api} />);
-    await screen.findByLabelText("مراقبة النشاط");
-    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/admin/ghl-connection"));
-    expect(screen.queryByRole("status", { name: "حالة الربط" })).toBeNull();
-    expect(screen.queryByText(/غير مربوط/)).toBeNull();
-    expect(screen.queryByText(/عارفين إنه نشاطهم مراقب/)).toBeNull();
-  });
-
   it("explains an idle threshold out of range", async () => {
     const put = vi.fn(async () => { throw Object.assign(new Error("x"), { code: "INVALID_IDLE_MINUTES" }); });
     wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true, idle_minutes: 5 }, { installed: true, has_activity_scope: true, last_event_at: null, events_24h: 0 }, put)} />);
@@ -150,36 +130,6 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
     await waitFor(() => expect(api.put.mock.calls[0][1].idle_minutes).toBe(1));
     expect(await screen.findByText("حد الخمول لازم يكون بين 1 و240 دقيقة")).toBeInTheDocument();
-  });
-
-  it("does not show connected after an uninstall even though an old event time remains", async () => {
-    const last = Date.UTC(2026, 8, 20, 8, 42) / 1000;
-    const api = awApi({ ...AW, activity_monitoring: true }, { installed: false, has_activity_scope: true, last_event_at: last, events_24h: 0 });
-    wrap(<SettingsPanel api={api} />);
-    await screen.findByLabelText("مراقبة النشاط");
-    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/admin/ghl-connection"));
-    expect(screen.queryByText(/مربوط/)).toBeNull();
-  });
-
-  it("shows connected when events flow although the scope was not stored", async () => {
-    const last = Date.UTC(2026, 8, 29, 8, 42) / 1000;
-    wrap(<SettingsPanel api={awApi({ ...AW, activity_monitoring: true }, { installed: true, has_activity_scope: false, last_event_at: last, events_24h: 3 })} />);
-    const status = await screen.findByRole("status", { name: "حالة الربط" });
-    await waitFor(() => expect(status.textContent).toContain("✓ مربوط"));
-    expect(status.textContent).toContain("3 حدث");
-  });
-
-  it("keeps the settings form usable when the connection status fails", async () => {
-    const api = {
-      get: vi.fn(async (path) => { if (path === "/admin/ghl-connection") throw new Error("boom"); return AW; }),
-      put: vi.fn(),
-    };
-    wrap(<SettingsPanel api={api} />);
-    expect(await screen.findByLabelText("مراقبة النشاط")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /حفظ/ })).toBeInTheDocument();
-    const status = screen.getByRole("status", { name: "حالة الربط" });
-    await waitFor(() => expect(status.textContent).toContain("تعذّر فحص حالة الربط"));
-    expect(screen.queryByText("حدث خطأ، حاول مرة أخرى")).not.toBeInTheDocument();
   });
 
   const WH = { ...BASE, work_end: "17:00", work_days: 127, activity_monitoring: true, idle_minutes: 30 };
@@ -204,19 +154,6 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
     await waitFor(() => expect(api.put).toHaveBeenCalled());
     expect(api.put.mock.calls[0][1]).toMatchObject({ work_end: "16:30", work_days: 95 });
-  });
-
-  it("hints that working hours are needed while monitoring is on without an end", async () => {
-    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? { ...WH, work_end: null } : { installed: false })), put: vi.fn() };
-    wrap(<SettingsPanel api={api} />);
-    expect(await screen.findByText("حدّد بداية ونهاية الدوام لتشتغل تنبيهات العمل بدون دوام")).toBeInTheDocument();
-  });
-
-  it("counts active GHL users who never opened TimeClock", async () => {
-    const conn = { installed: true, has_activity_scope: true, last_event_at: null, events_24h: 3, unknown_active_users: 2 };
-    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? WH : conn)), put: vi.fn() };
-    wrap(<SettingsPanel api={api} />);
-    expect(await screen.findByText("في نشاط بآخر 7 أيام من 2 مستخدمين ما فتحوا TimeClock بعد")).toBeInTheDocument();
   });
 
   it("explains an invalid working-day end", async () => {
@@ -248,55 +185,37 @@ describe("SettingsPanel", () => {
       expect(await screen.findByLabelText(label)).toHaveAttribute("type", "time");
     }
   });
-  it("saves the company language", async () => {
-    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? { ...BASE, locale: "ar" } : { installed: false })), put: vi.fn(async (_p, b) => b) };
-    wrap(<SettingsPanel api={api} />);
-    fireEvent.change(await screen.findByLabelText("لغة الشركة"), { target: { value: "en" } });
-    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
-    await waitFor(() => expect(api.put.mock.calls[0][1].locale).toBe("en"));
-  });
-
-  it("switches this screen to the saved company language without touching the personal choice", async () => {
-    const onChange = vi.fn();
-    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? { ...BASE, locale: "ar" } : { installed: false })), put: vi.fn(async (_p, b) => ({ ...b })) };
-    render(<I18nProvider locale="ar" onChange={onChange}><ToastProvider><SettingsPanel api={api} /></ToastProvider></I18nProvider>);
-    fireEvent.change(await screen.findByLabelText("لغة الشركة"), { target: { value: "en" } });
-    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
-    await waitFor(() => expect(document.documentElement.dir).toBe("ltr"));
-    expect(onChange).not.toHaveBeenCalled();
-    expect(api.put).toHaveBeenCalledTimes(1);
-  });
-  it("keeps the screen language when the company language is unchanged", async () => {
-    const api = { get: vi.fn(async (p) => (p === "/admin/settings" ? { ...BASE, locale: "ar" } : { installed: false })), put: vi.fn(async (_p, b) => ({ ...b })) };
-    render(<I18nProvider locale="ar"><ToastProvider><SettingsPanel api={api} /></ToastProvider></I18nProvider>);
-    fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
-    await waitFor(() => expect(api.put).toHaveBeenCalled());
-    expect(document.documentElement.dir).toBe("rtl");
-  });
-
-  it("saves the early-leave approval setting and warns without a work end", async () => {
+  it("saves the early-leave approval setting", async () => {
     const api = {
-      get: vi.fn(async (p) => (p === "/admin/settings" ? { ...WH, work_end: null, early_leave_approval: false } : { installed: false })),
+      get: vi.fn(async (p) => (p === "/admin/settings" ? { ...WH, early_leave_approval: false } : { installed: false })),
       put: vi.fn(async (_path, body) => body),
     };
     wrap(<SettingsPanel api={api} />);
     fireEvent.click(await screen.findByLabelText("الإنهاء قبل نهاية الدوام بيحتاج موافقة المدير"));
-    expect(screen.getByText("لازم يكون وقت نهاية الدوام محدد")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
     await waitFor(() => expect(api.put).toHaveBeenCalled());
     expect(api.put.mock.calls[0][1]).toEqual(expect.objectContaining({ early_leave_approval: true }));
   });
 
-  it("saves the pipeline-activity setting, shown only while monitoring is on", async () => {
-    const api = awApi({ ...AW, activity_monitoring: false, pipeline_activity: false }, { installed: true, has_activity_scope: true, last_event_at: null, events_24h: 0 });
-    wrap(<SettingsPanel api={api} />);
+  it("shows no helper texts, no connection status, no separate pipeline box and no company language", async () => {
+    const api = { get: vi.fn(async (p) => (p === "/admin/settings"
+      ? { ...WH, work_end: null, early_leave_approval: true, activity_monitoring: true }
+      : { installed: true, has_activity_scope: true, last_event_at: 1, events_24h: 3, unknown_active_users: 2 })), put: vi.fn() };
+    const { container } = wrap(<SettingsPanel api={api} />);
     await screen.findByLabelText("مراقبة النشاط");
-    expect(screen.queryByLabelText("احسب تحديثات الـ Pipeline كنشاط")).toBeNull();
-    fireEvent.click(screen.getByLabelText("مراقبة النشاط"));
-    fireEvent.click(screen.getByLabelText("احسب تحديثات الـ Pipeline كنشاط"));
-    expect(screen.getByText("بتنحسب للموظف المسؤول عن الصفقة")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    expect(container.querySelectorAll(".hint")).toHaveLength(0);
+    expect(screen.queryByText(/مربوط/)).toBeNull();
+    expect(screen.queryByText(/Pipeline/)).toBeNull();
+    expect(screen.queryByLabelText("لغة الشركة")).toBeNull();
+    expect(api.get).not.toHaveBeenCalledWith("/admin/ghl-connection");
+  });
+
+  it("never sends the company language, so saving keeps it", async () => {
+    const api = { get: vi.fn(async () => ({ ...BASE, locale: "en" })), put: vi.fn(async (_p, b) => b) };
+    wrap(<SettingsPanel api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: /حفظ/ }));
     await waitFor(() => expect(api.put).toHaveBeenCalled());
-    expect(api.put.mock.calls[0][1]).toEqual(expect.objectContaining({ activity_monitoring: true, pipeline_activity: true }));
+    expect("locale" in api.put.mock.calls[0][1]).toBe(false);
+    expect("pipeline_activity" in api.put.mock.calls[0][1]).toBe(false);
   });
 });

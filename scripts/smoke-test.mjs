@@ -1418,17 +1418,18 @@ const plEvent = (assignedTo, type = "OpportunityStageUpdate") => {
 };
 const plRows = async (where = "1=1") => (await localRows(
   `SELECT COUNT(*) AS n FROM activity_events WHERE location_id = :loc AND kind = 'pipeline' AND ${where}`, { loc: PLLOC }))?.[0]?.n;
-check("pipeline activity is off by default", (await call(PLM, "GET", "/admin/settings")).body?.pipeline_activity === false);
-check("a non-boolean pipeline setting → 400",
-  (await call(PLM, "PUT", "/admin/settings", { timezone: "UTC", pipeline_activity: "yes" })).body?.error === "INVALID_PIPELINE_ACTIVITY");
 await call(PLM, "PUT", "/admin/settings",
-  { timezone: "UTC", work_start: "00:00", work_end: "23:59", work_days: 127, activity_monitoring: true, idle_minutes: 1 });
+  { timezone: "UTC", work_start: "00:00", work_end: "23:59", work_days: 127, activity_monitoring: false, idle_minutes: 1 });
 const plT = Math.floor(Date.now() / 1000);
 const plBack = await localRows("UPDATE settings SET activity_monitoring_since = :s WHERE location_id = :loc", { s: plT - 7200, loc: PLLOC });
 if (!awAcceptsTestKey || plBack === null) {
   console.log("  SKIP  pipeline activity checks (test key or local DB unavailable)");
 } else {
   await connectActivity(PLLOC);
+  await plEvent(`${PLLOC}-u1`);
+  check("with monitoring off a pipeline update is not stored", Number(await plRows()) === 0);
+  await call(PLM, "PUT", "/admin/settings", { activity_monitoring: true });
+  await localRows("UPDATE settings SET activity_monitoring_since = :s WHERE location_id = :loc", { s: plT - 7200, loc: PLLOC });
   await call(PLE, "POST", "/session/start");
   await localRows("UPDATE sessions SET started_at = :s WHERE location_id = :loc AND ended_at IS NULL", { s: plT - 600, loc: PLLOC });
   const plIdle = async () => ((await call(PLM, "GET", "/admin/alerts?status=open")).body?.alerts ?? []).filter((a) => a.kind === "idle");
@@ -1436,15 +1437,8 @@ if (!awAcceptsTestKey || plBack === null) {
   check("(precondition) an idle stretch is open", plA && plA.to_at === null, `(${JSON.stringify(plA)})`);
 
   await plEvent(`${PLLOC}-u1`);
-  check("with the setting off a pipeline update is not stored", Number(await plRows()) === 0);
-  check("with the setting off a pipeline update does not end the idle stretch", (await plIdle())[0]?.to_at === null);
-
-  const plOn = await call(PLM, "PUT", "/admin/settings", { pipeline_activity: true });
-  check("the pipeline setting is saved", plOn.body?.pipeline_activity === true, `(${plOn.status} ${JSON.stringify(plOn.body?.error)})`);
-  check("a settings save without the field keeps it",
-    (await call(PLM, "PUT", "/admin/settings", { timezone: "UTC" })).body?.pipeline_activity === true);
-  await plEvent(`${PLLOC}-u1`);
-  check("with the setting on a pipeline update is stored for the assignee", Number(await plRows(`user_id = '${PLLOC}-u1'`)) === 1);
+  check("with monitoring on a pipeline update is stored for the assignee (no separate setting)",
+    Number(await plRows(`user_id = '${PLLOC}-u1'`)) === 1);
   check("a pipeline update ends the idle stretch like a message", (await plIdle())[0]?.to_at != null,
     `(${JSON.stringify((await plIdle())[0])})`);
   check("the live floor shows the employee active again",

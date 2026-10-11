@@ -31,7 +31,10 @@ button,input,select,textarea{font:inherit; color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--pink); outline-offset:2px}
 .ltr{direction:ltr; unicode-bidi:isolate}
-td.ltr{text-align:match-parent}
+/* LTR numbers/dates sit at the start of the line like everything else (and like their column's
+   header). match-parent is not reliable in table cells, so the side follows the page direction. */
+:is(td.ltr, td.num, .timer, .kpi dd, .summary strong){text-align:right}
+[dir="ltr"] :is(td.ltr, td.num, .timer, .kpi dd, .summary strong){text-align:left}
 .muted{color:var(--muted)}
 .error{color:var(--neg)}
 .sr{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap}
@@ -113,7 +116,7 @@ h3{margin:0; font-size:15px; font-weight:600}
 .hello{font-size:15px; color:var(--muted)}
 .timer{
   font-size:clamp(56px, 9vw, 104px); font-weight:700; line-height:1; letter-spacing:-2px;
-  color:var(--ink); margin:14px 0 10px; direction:ltr; text-align:match-parent;
+  color:var(--ink); margin:14px 0 10px; direction:ltr;
 }
 .timer .sec{color:var(--muted); font-weight:500; font-size:.42em; letter-spacing:0}
 .hero-meta{display:flex; gap:28px; flex-wrap:wrap; font-size:14px; color:var(--muted)}
@@ -166,7 +169,7 @@ h3{margin:0; font-size:15px; font-weight:600}
 .kpi{padding:18px 20px; border-inline-start:1px solid var(--line)}
 .kpi:first-child{border-inline-start:0}
 .kpi dt{font-size:14px; color:var(--muted)}
-.kpi dd{margin:4px 0 0; font-size:32px; font-weight:700; line-height:1.1; direction:ltr; text-align:match-parent}
+.kpi dd{margin:4px 0 0; font-size:32px; font-weight:700; line-height:1.1; direction:ltr}
 .kpi dd small{font-size:16px; color:var(--muted); font-weight:500}
 .kpi.pos dd{color:var(--pos)} .kpi.neg dd{color:var(--neg)} .kpi.warn dd{color:var(--warn)} .kpi.acc dd{color:var(--accent)}
 
@@ -216,7 +219,7 @@ table{width:100%; border-collapse:collapse; min-width:820px}
 th{background:var(--head); color:var(--head-ink); font-size:13px; font-weight:600; text-align:start; padding:11px 14px; white-space:nowrap}
 td{padding:11px 14px; border-top:1px solid var(--line); font-size:14px; white-space:nowrap}
 tbody tr:nth-child(even) td{background:var(--sunken)}
-td.num{direction:ltr; text-align:match-parent; font-weight:600}
+td.num{direction:ltr; font-weight:600}
 td.late{color:var(--neg); font-weight:600; white-space:nowrap}
 td.note{max-width:280px; white-space:normal; overflow-wrap:anywhere; color:var(--muted)}
 .who{display:flex; align-items:center; gap:10px}
@@ -254,7 +257,7 @@ dialog::backdrop{background:rgba(20,20,37,.5)}
 .overlay{position:fixed; inset:0; background:rgba(20,20,37,.5); display:grid; place-items:center; z-index:60; padding:16px}
 .overlay .dlg{background:var(--panel); border-radius:var(--r-lg); width:min(480px, 100%)}
 .summary{background:var(--sunken); border-radius:12px; padding:14px 16px; display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px}
-.summary strong{display:block; font-size:22px; direction:ltr; text-align:match-parent}
+.summary strong{display:block; font-size:22px; direction:ltr}
 .note{border-radius:10px; padding:10px 12px; font-size:14px; margin-bottom:14px}
 .note.warn{background:var(--warn-soft); color:var(--warn)}
 
