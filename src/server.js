@@ -1040,6 +1040,8 @@ app.get("/admin/live", authed, managerOnly, async (c) => {
        LEFT JOIN sessions s ON s.user_id = e.user_id AND s.location_id = e.location_id AND s.ended_at IS NULL
        LEFT JOIN breaks b ON b.session_id = s.id AND b.ended_at IS NULL
       WHERE e.location_id = :loc AND e.is_active = 1
+        -- Admin accounts (the company's and the agency's) cannot clock in: not part of the team.
+        AND (e.role = 'employee' OR s.id IS NOT NULL)
       ORDER BY s.started_at IS NULL, e.name`,
     { loc, now: t }
   )).map((e) => ({ ...e, break_sec: e.break_sec == null ? null : Number(e.break_sec) }));
@@ -1134,7 +1136,9 @@ app.get("/admin/report", authed, managerOnly, async (c) => {
               ON s.user_id = e.user_id AND s.location_id = e.location_id
              AND s.started_at < :to AND (s.ended_at IS NULL OR s.ended_at > :from)
       WHERE e.location_id = :loc AND e.is_active = 1
-      GROUP BY e.user_id, e.name, e.email
+      GROUP BY e.user_id, e.name, e.email, e.role
+      -- Admin accounts appear only for hours they actually recorded (e.g. before a role change).
+      HAVING e.role = 'employee' OR COUNT(s.id) > 0
       ORDER BY worked_sec DESC`,
     { now: now(), to, from, loc }
   );
