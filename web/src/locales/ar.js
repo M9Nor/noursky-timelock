@@ -207,4 +207,6 @@ export default {
   "earlyLeave.colEmployee": "الموظف",
   "settings.earlyLeave": "الإنهاء قبل نهاية الدوام بيحتاج موافقة المدير",
   "report.closedBy.approved": "بموافقة المدير",
+  "settings.tzCommon": "الأكثر استخداماً",
+  "settings.tzAll": "كل المناطق",
 };

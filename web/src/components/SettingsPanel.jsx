@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Button from "./Button.jsx";
 import { useToast } from "./ToastContext.jsx";
 import { useI18n } from "../i18n.jsx";
+import { COMMON_ZONES, allZones, zoneLabel } from "../timezones.js";
 
 // Saturday first, as the week reads in the region; bit = JavaScript getDay() (0 = Sunday).
 const WEEK = [6, 0, 1, 2, 3, 4, 5];
@@ -58,7 +59,20 @@ export default function SettingsPanel({ api }) {
   return (
     <section className="panel" style={{ maxWidth: 480 }}>
       <div className="panel-h"><h2>{t("settings.title")}</h2></div>
-      <div className="field"><label>{t("settings.timezone")}</label><input value={s.timezone} onChange={set("timezone")} /></div>
+      <div className="field">
+        <label htmlFor="timezone">{t("settings.timezone")}</label>
+        <select id="timezone" className="ltr" value={s.timezone ?? ""} onChange={set("timezone")}>
+          {!allZones().includes(s.timezone) && !COMMON_ZONES.includes(s.timezone) && s.timezone && (
+            <option value={s.timezone}>{zoneLabel(s.timezone)}</option>
+          )}
+          <optgroup label={t("settings.tzCommon")}>
+            {COMMON_ZONES.map((z) => <option key={`c-${z}`} value={z}>{zoneLabel(z)}</option>)}
+          </optgroup>
+          <optgroup label={t("settings.tzAll")}>
+            {allZones().filter((z) => !COMMON_ZONES.includes(z)).map((z) => <option key={z} value={z}>{zoneLabel(z)}</option>)}
+          </optgroup>
+        </select>
+      </div>
       <div className="field"><label>{t("settings.dailyTarget")}</label><input type="number" step="0.5" value={s.daily_target_hours} onChange={set("daily_target_hours")} /></div>
       <div className="field"><label>{t("settings.maxSession")}</label><input type="number" step="0.5" value={s.max_session_hours} onChange={set("max_session_hours")} /></div>
       <div className="field"><label htmlFor="work-start">{t("settings.workStart")}</label><input id="work-start" type="time" value={s.work_start ?? ""} onChange={set("work_start")} /></div>
