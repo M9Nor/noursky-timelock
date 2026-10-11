@@ -218,4 +218,23 @@ describe("SettingsPanel", () => {
     expect("locale" in api.put.mock.calls[0][1]).toBe(false);
     expect("pipeline_activity" in api.put.mock.calls[0][1]).toBe(false);
   });
+  it("picks the timezone from a list (with its UTC offset) instead of typing it", async () => {
+    const api = { get: vi.fn(async () => ({ ...BASE, timezone: "Asia/Riyadh" })), put: vi.fn(async (_p, b) => b) };
+    wrap(<SettingsPanel api={api} />);
+    const tz = await screen.findByLabelText("المنطقة الزمنية");
+    expect(tz.tagName).toBe("SELECT");
+    expect(tz.value).toBe("Asia/Riyadh");
+    const damascus = [...tz.options].find((o) => o.value === "Asia/Damascus");
+    expect(damascus.textContent).toMatch(/Damascus.*\(UTC[+-]\d\d:\d\d\)/);
+    fireEvent.change(tz, { target: { value: "Asia/Damascus" } });
+    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(api.put.mock.calls[0][1].timezone).toBe("Asia/Damascus");
+  });
+
+  it("keeps a saved timezone that is not in the list", async () => {
+    const api = { get: vi.fn(async () => ({ ...BASE, timezone: "Etc/GMT-3" })), put: vi.fn() };
+    wrap(<SettingsPanel api={api} />);
+    expect((await screen.findByLabelText("المنطقة الزمنية")).value).toBe("Etc/GMT-3");
+  });
 });

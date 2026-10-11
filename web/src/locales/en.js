@@ -207,4 +207,6 @@ export default {
   "earlyLeave.colEmployee": "Employee",
   "settings.earlyLeave": "Ending before the work end needs the manager's approval",
   "report.closedBy.approved": "Manager approval",
+  "settings.tzCommon": "Most used",
+  "settings.tzAll": "All zones",
 };
