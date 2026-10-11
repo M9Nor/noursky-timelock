@@ -54,6 +54,29 @@ test("a missing or bad date falls back to the arrival time; a missing user stays
   assert.equal(ev.messageId, null);
 });
 
+test("a pipeline update becomes pipeline activity for the assigned user, at arrival time", () => {
+  for (const type of ["OpportunityStageUpdate", "OpportunityStatusUpdate", "OpportunityUpdate", "OpportunityMonetaryValueUpdate"]) {
+    const ev = parseWebhook({
+      type, locationId: "loc1", webhookId: "w5", id: "opp1", assignedTo: "u7", name: "صفقة",
+      monetaryValue: 500, pipelineStageId: "st2", status: "open", source: "form", dateAdded: "2026-01-01T00:00:00.000Z",
+    }, 4321);
+    assert.deepEqual(ev, {
+      event: "activity", locationId: "loc1", webhookId: "w5", messageId: null, userId: "u7",
+      kind: "pipeline", messageType: type, source: null, occurredAt: 4321,
+    }, type);
+  }
+});
+
+test("an unassigned pipeline update credits nobody", () => {
+  assert.equal(parseWebhook({ type: "OpportunityStageUpdate", locationId: "loc1" }, 1).userId, null);
+});
+
+test("creating or reassigning an opportunity is not activity", () => {
+  for (const type of ["OpportunityCreate", "OpportunityAssignedToUpdate", "OpportunityDelete"]) {
+    assert.equal(parseWebhook({ type, locationId: "loc1", assignedTo: "u7" }, 1).event, "ignored", type);
+  }
+});
+
 test("install and uninstall events are recognised", () => {
   assert.deepEqual(parseWebhook({ type: "INSTALL", locationId: "loc1", companyId: "c1", webhookId: "w9" }, 1),
     { event: "install", locationId: "loc1", companyId: "c1", webhookId: "w9", appId: null });

@@ -66,6 +66,7 @@ export default function SettingsPanel({ api }) {
         note_on_stop: s.note_on_stop ?? "off",
         activity_monitoring: Boolean(s.activity_monitoring),
         early_leave_approval: Boolean(s.early_leave_approval),
+        pipeline_activity: Boolean(s.pipeline_activity),
         // Same empty-field rule as the grace: an emptied field means the default.
         idle_minutes: s.idle_minutes === "" || s.idle_minutes == null ? 30 : Number(s.idle_minutes),
         locale: s.locale ?? "ar",
@@ -140,6 +141,13 @@ export default function SettingsPanel({ api }) {
         <div className="field">
           <label htmlFor="idle-minutes">{t("settings.idleMinutes")}</label>
           <input id="idle-minutes" type="number" step="1" min="1" max="240" value={s.idle_minutes ?? 30} onChange={set("idle_minutes")} />
+        </div>
+      )}
+      {s.activity_monitoring && (
+        <div className="field check">
+          <label><input id="pipeline-activity" type="checkbox" checked={Boolean(s.pipeline_activity)}
+            onChange={(e) => setS({ ...s, pipeline_activity: e.target.checked })} />{t("settings.pipelineActivity")}</label>
+          {s.pipeline_activity && <p className="hint">{t("settings.pipelineHint")}</p>}
         </div>
       )}
       <div className="field">

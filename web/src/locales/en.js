@@ -220,4 +220,6 @@ export default {
   "settings.earlyLeave": "Ending before the work end needs the manager's approval",
   "settings.earlyLeaveHint": "The work end time must be set",
   "report.closedBy.approved": "Manager approval",
+  "settings.pipelineActivity": "Count pipeline updates as activity",
+  "settings.pipelineHint": "Credited to the employee the opportunity is assigned to",
 };

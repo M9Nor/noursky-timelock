@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS settings (
   break_policy_since BIGINT       NULL,
   activity_monitoring       TINYINT(1)  NOT NULL DEFAULT 0,
   idle_minutes              INT         NOT NULL DEFAULT 30,
+  pipeline_activity         TINYINT(1)  NOT NULL DEFAULT 0,  -- pipeline updates count as activity for the assignee
   activity_monitoring_since BIGINT      NULL,
   max_session_hours  DECIMAL(4,2) NOT NULL DEFAULT 12,
   updated_at         BIGINT       NOT NULL
@@ -115,7 +116,7 @@ CREATE TABLE IF NOT EXISTS activity_events (
   location_id  VARCHAR(64)  NOT NULL,
   user_id      VARCHAR(64)  NULL,
   occurred_at  BIGINT       NOT NULL,
-  kind         ENUM('message','call','comment','other') NOT NULL,
+  kind         ENUM('message','call','comment','other','pipeline') NOT NULL,
   message_type VARCHAR(40)  NULL,
   source       VARCHAR(60)  NULL,
   webhook_id   VARCHAR(100) NOT NULL,

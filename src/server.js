@@ -159,6 +159,7 @@ async function getSettings(loc) {
       break_paid: Boolean(st.break_paid),
       activity_monitoring: Boolean(st.activity_monitoring),
       early_leave_approval: Boolean(st.early_leave_approval),
+      pipeline_activity: Boolean(st.pipeline_activity),
     }
     : null;
 }
@@ -1554,6 +1555,10 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
     throw new HttpError(400, "INVALID_EARLY_LEAVE");
   }
   const earlyLeave = has("early_leave_approval") ? b.early_leave_approval : Boolean(cur.early_leave_approval);
+  if (has("pipeline_activity") && typeof b.pipeline_activity !== "boolean") {
+    throw new HttpError(400, "INVALID_PIPELINE_ACTIVITY");
+  }
+  const pipelineActivity = has("pipeline_activity") ? b.pipeline_activity : Boolean(cur.pipeline_activity);
 
   // break_policy_since moves to now only when the break policy itself changes. It is
   // assigned FIRST so it compares against the stored values: MySQL evaluates single-table
@@ -1573,7 +1578,8 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
                          breaks_enabled = :breaksEnabled, break_mode = :breakMode,
                          break_start = :breakStart, break_end = :breakEnd, break_paid = :breakPaid,
                          activity_monitoring = :monitoring, idle_minutes = :idleMinutes,
-                         early_leave_approval = :earlyLeave, note_on_stop = :notePolicy, updated_at = :t
+                         early_leave_approval = :earlyLeave, pipeline_activity = :pipelineActivity,
+                         note_on_stop = :notePolicy, updated_at = :t
       WHERE location_id = :loc`,
     {
       tz: timezone, locale, target, ws: workStart, we: workEnd, wd: workDays, grace, max,
@@ -1581,6 +1587,7 @@ app.put("/admin/settings", authed, managerOnly, async (c) => {
       breaksEnabled: breakMode === "flexible" ? 1 : 0, breakMode, breakStart, breakEnd,
       breakPaid: breakPaid ? 1 : 0, notePolicy, t: now(), loc,
       monitoring: monitoring ? 1 : 0, idleMinutes, earlyLeave: earlyLeave ? 1 : 0,
+      pipelineActivity: pipelineActivity ? 1 : 0,
     }
   );
   // Monitoring switched off: nothing detects or ends an idle stretch any more, so the ongoing
@@ -1714,7 +1721,9 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
 
   if (ev.event === "activity") {
     const st = await getSettings(ev.locationId);
-    if (st?.activity_monitoring) {
+    // Pipeline updates count only where the company turned them on (credited to the assignee).
+    const pipeline = ev.kind === "pipeline";
+    if (st?.activity_monitoring && (!pipeline || st.pipeline_activity)) {
       // GHL retries a failed delivery up to 12 times, and the same message can arrive again
       // through another app with a new webhookId: the key prefers the message id.
       const webhookId = activityDedupeKey(ev, raw);
@@ -1734,7 +1743,8 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
       if (ev.userId && stored.affectedRows > 0) {
         await endIdleStretch(st, ev.locationId, String(ev.userId), ev.occurredAt, t)
           .catch((e) => console.error("[idle-resume]", e));
-        await openNotClockedInAlert(st, ev.locationId, String(ev.userId), ev.occurredAt, t);
+        // Automations move opportunities at any hour: only a person's message opens this alert.
+        if (!pipeline) await openNotClockedInAlert(st, ev.locationId, String(ev.userId), ev.occurredAt, t);
       }
     }
   }
