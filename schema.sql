@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS settings (
   break_policy_since BIGINT       NULL,
   activity_monitoring       TINYINT(1)  NOT NULL DEFAULT 0,
   idle_minutes              INT         NOT NULL DEFAULT 30,
-  pipeline_activity         TINYINT(1)  NOT NULL DEFAULT 0,  -- pipeline updates count as activity for the assignee
+  pipeline_activity         TINYINT(1)  NOT NULL DEFAULT 0,  -- unused since 2026-10-11: pipeline updates follow activity_monitoring
   activity_monitoring_since BIGINT      NULL,
   max_session_hours  DECIMAL(4,2) NOT NULL DEFAULT 12,
   updated_at         BIGINT       NOT NULL
