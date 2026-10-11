@@ -1702,6 +1702,19 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
                                last_event_at = VALUES(last_event_at), updated_at = VALUES(updated_at)`,
       { loc: ev.locationId, company: ev.companyId, installedAt: installed ? t : null, uninstalledAt: installed ? null : t, t }
     );
+    // A sub-account installed by the agency inherits the scopes its company granted (bulk grant).
+    // The derived table is materialised (LIMIT), so reading the same table is allowed.
+    if (installed && ev.companyId) {
+      await q(
+        `UPDATE ghl_installs g
+           JOIN (SELECT scopes FROM ghl_installs
+                  WHERE company_id = :company AND location_id <> :loc AND scopes IS NOT NULL
+                  ORDER BY updated_at DESC LIMIT 1) src
+            SET g.scopes = src.scopes
+          WHERE g.location_id = :loc AND g.scopes IS NULL`,
+        { company: ev.companyId, loc: ev.locationId }
+      );
+    }
     return c.json({ ok: true });
   }
 
@@ -1745,6 +1758,22 @@ app.post("/webhooks/events", webhookBodyLimit, async (c) => {
 });
 
 const DEFAULT_REDIRECT_URI = "https://timeclock.noursky.com/oauth/callback";
+// Test-only: the smoke test points the code exchange at a fake token server. Honoured only when
+// NODE_ENV is development or test (fails closed in production, like the webhook test key).
+const TEST_TOKEN_URL = testKeyAllowed(env.NODE_ENV) && env.GHL_TOKEN_URL ? env.GHL_TOKEN_URL : undefined;
+
+/**
+ * An install or update made from the agency for its sub-accounts comes back as a Company grant:
+ * every sub-account of that company that has the app gets the granted scopes. Sub-accounts the
+ * agency installs later inherit them when their install event arrives (see the webhook).
+ */
+async function recordCompanyGrant(companyId, scopes, t) {
+  await q(
+    `UPDATE ghl_installs SET scopes = :scopes, updated_at = :t
+      WHERE company_id = :company AND uninstalled_at IS NULL`,
+    { scopes: String(scopes).slice(0, 1000), t, company: companyId }
+  );
+}
 
 const INSTALL_TEXT = {
   ar: {
@@ -1796,7 +1825,7 @@ app.get("/oauth/callback", async (c) => {
   try {
     tok = await exchangeCode({
       code, clientId: env.GHL_CLIENT_ID, clientSecret: env.GHL_CLIENT_SECRET,
-      redirectUri: env.GHL_REDIRECT_URI || DEFAULT_REDIRECT_URI,
+      redirectUri: env.GHL_REDIRECT_URI || DEFAULT_REDIRECT_URI, tokenUrl: TEST_TOKEN_URL,
     });
   } catch (e) {
     console.error("[oauth]", e.message, e.status ?? "", e.detail ?? "");
@@ -1807,6 +1836,10 @@ app.get("/oauth/callback", async (c) => {
   }
   try {
     const t = now();
+    if (tok.kind === "company") {
+      await recordCompanyGrant(tok.companyId, tok.scopes, t);
+      return c.html(installPage(c, "connected", "done"));
+    }
     await q(
       `INSERT INTO ghl_installs (location_id, company_id, access_token_enc, refresh_token_enc, token_expires_at,
                                  scopes, installed_at, uninstalled_at, updated_at)

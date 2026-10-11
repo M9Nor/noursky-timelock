@@ -28,7 +28,7 @@ test("maps a successful response", async () => {
     scope: "conversations/message.readonly", locationId: "loc1", companyId: "c1",
   }) });
   assert.deepEqual(out, {
-    accessToken: "acc", refreshToken: "ref", expiresIn: 86399,
+    kind: "location", accessToken: "acc", refreshToken: "ref", expiresIn: 86399,
     scopes: "conversations/message.readonly", locationId: "loc1", companyId: "c1",
   });
 });
@@ -37,17 +37,26 @@ test("a refused code throws OAUTH_EXCHANGE_FAILED", async () => {
   await assert.rejects(exchangeCode({ ...args, fetchImpl: fakeFetch(400, { error: "invalid_grant" }) }), /OAUTH_EXCHANGE_FAILED/);
 });
 
-test("a token without a location throws (agency-level installs are not supported)", async () => {
-  await assert.rejects(exchangeCode({ ...args, fetchImpl: fakeFetch(200, { access_token: "a", companyId: "c1" }) }), /OAUTH_EXCHANGE_FAILED/);
+test("an agency-level (bulk) install maps to the company and its scopes, without keeping the token", async () => {
+  const out = await exchangeCode({ ...args, fetchImpl: fakeFetch(200, {
+    access_token: "SECRET", refresh_token: "SECRET2", userType: "Company", companyId: "c1", isBulkInstallation: true,
+    approveAllLocations: true, scope: "users.readonly conversations/message.readonly opportunities.readonly",
+  }) });
+  assert.deepEqual(out, { kind: "company", companyId: "c1", scopes: "users.readonly conversations/message.readonly opportunities.readonly" });
+});
+
+test("a token with neither a location nor a company throws", async () => {
+  await assert.rejects(exchangeCode({ ...args, fetchImpl: fakeFetch(200, { access_token: "a" }) }), /OAUTH_EXCHANGE_FAILED/);
+  await assert.rejects(exchangeCode({ ...args, fetchImpl: fakeFetch(200, { access_token: "a", userType: "Company" }) }), /OAUTH_EXCHANGE_FAILED/);
 });
 
 test("a refused exchange carries the response shape for the log, never a token value", async () => {
   const err = await exchangeCode({ ...args, fetchImpl: fakeFetch(200, {
-    access_token: "SECRET-ACCESS", refresh_token: "SECRET-REFRESH", userType: "Company",
-    companyId: "c1", isBulkInstallation: true,
+    access_token: "SECRET-ACCESS", refresh_token: "SECRET-REFRESH", userType: "Location",
+    isBulkInstallation: false,
   }) }).catch((e) => e);
   assert.match(err.message, /OAUTH_EXCHANGE_FAILED/);
-  assert.equal(err.detail, "userType=Company bulk=true keys=access_token,companyId,isBulkInstallation,refresh_token,userType");
+  assert.equal(err.detail, "userType=Location bulk=false keys=access_token,isBulkInstallation,refresh_token,userType");
   assert.ok(!JSON.stringify({ m: err.message, d: err.detail }).includes("SECRET"));
 });
 
