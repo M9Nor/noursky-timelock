@@ -169,7 +169,9 @@ check("status shows open session", !!st.body?.open_session);
 check("employee blocked from admin", (await call(E, "GET", "/admin/live")).status === 403);
 
 const live = await call(M, "GET", "/admin/live");
-check("manager sees live list", Array.isArray(live.body?.employees) && live.body.employees.length === 2);
+check("manager sees live list of employees only (no admin accounts)",
+  Array.isArray(live.body?.employees) && live.body.employees.length === 1 && live.body.employees[0].user_id === `${LOC}-u1`,
+  `(${JSON.stringify(live.body?.employees?.map((e) => e.user_id))})`);
 
 await sleep(1100);
 const stop = await call(E, "POST", "/session/stop");
@@ -181,6 +183,8 @@ const rep = await call(M, "GET", `/admin/report?from=${t - 86400}&to=${t + 10}`)
 const row = rep.body?.employees?.find((e) => e.name === "أحمد");
 check("report returns worked_sec", row && row.worked_sec >= 1);
 check("report returns late_days", row && typeof row.late_days === "number");
+check("report leaves out admin accounts without sessions",
+  !(rep.body?.employees ?? []).some((e) => e.user_id === `${LOC}-m1`));
 
 const list = await call(M, "GET", `/admin/sessions?from=${t - 86400}&to=${t + 10}`);
 const sid = list.body?.sessions?.[0]?.id;
