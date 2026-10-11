@@ -286,4 +286,17 @@ describe("SettingsPanel", () => {
     await waitFor(() => expect(api.put).toHaveBeenCalled());
     expect(api.put.mock.calls[0][1]).toEqual(expect.objectContaining({ early_leave_approval: true }));
   });
+
+  it("saves the pipeline-activity setting, shown only while monitoring is on", async () => {
+    const api = awApi({ ...AW, activity_monitoring: false, pipeline_activity: false }, { installed: true, has_activity_scope: true, last_event_at: null, events_24h: 0 });
+    wrap(<SettingsPanel api={api} />);
+    await screen.findByLabelText("مراقبة النشاط");
+    expect(screen.queryByLabelText("احسب تحديثات الـ Pipeline كنشاط")).toBeNull();
+    fireEvent.click(screen.getByLabelText("مراقبة النشاط"));
+    fireEvent.click(screen.getByLabelText("احسب تحديثات الـ Pipeline كنشاط"));
+    expect(screen.getByText("بتنحسب للموظف المسؤول عن الصفقة")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /حفظ/ }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(api.put.mock.calls[0][1]).toEqual(expect.objectContaining({ activity_monitoring: true, pipeline_activity: true }));
+  });
 });

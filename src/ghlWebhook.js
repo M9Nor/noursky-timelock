@@ -66,8 +66,31 @@ export function parseWebhook(payload, receivedAt) {
       occurredAt: Number.isFinite(at) ? Math.floor(at / 1000) : receivedAt,
     };
   }
+  if (PIPELINE_TYPES.has(type)) {
+    // The payload names the assigned user, not who made the change, and its dateAdded is the
+    // opportunity's creation date: the event is credited to the assignee at arrival time.
+    return {
+      event: "activity",
+      locationId,
+      webhookId,
+      messageId: null,
+      userId: payload?.assignedTo ?? null,
+      kind: "pipeline",
+      messageType: type,
+      source: null,
+      occurredAt: receivedAt,
+    };
+  }
   return { event: "ignored", locationId, webhookId };
 }
+
+/**
+ * Pipeline changes counted as activity when the company turns it on. Creating an opportunity
+ * (usually a form or an automation) and reassigning it (usually a manager) are left out.
+ */
+const PIPELINE_TYPES = new Set([
+  "OpportunityStageUpdate", "OpportunityStatusUpdate", "OpportunityUpdate", "OpportunityMonetaryValueUpdate",
+]);
 
 /**
  * GHL signs every Marketplace app's webhooks with the same key, so a valid signature proves

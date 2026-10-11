@@ -220,4 +220,6 @@ export default {
   "settings.earlyLeave": "الإنهاء قبل نهاية الدوام بيحتاج موافقة المدير",
   "settings.earlyLeaveHint": "لازم يكون وقت نهاية الدوام محدد",
   "report.closedBy.approved": "بموافقة المدير",
+  "settings.pipelineActivity": "احسب تحديثات الـ Pipeline كنشاط",
+  "settings.pipelineHint": "بتنحسب للموظف المسؤول عن الصفقة",
 };
